@@ -59,12 +59,13 @@ scripts/make_icons.py pure-stdlib PNG icon generator (run once, output committed
 
 ## Develop
 
-Client (from `client/`): `node node_modules/typescript/bin/tsc --noEmit`
-then `node node_modules/vite/bin/vite.js build`. Plain `npm run build` breaks
-on this machine — cmd.exe splits on the `&` in `Documents\D&D` — so invoke
-the binaries directly. For live-reload dev: `node node_modules/vite/bin/vite.js`
-(vite dev server proxies `/api` and `/ws` to :8770) and run the python server
-alongside. Python edits need a server restart; static/built assets reload.
+Client (from `client/`): `npm run build`. Two machine quirks are already
+handled: `client/.npmrc` routes npm scripts through Git Bash (cmd.exe
+mis-parses the `&` in `Documents\D&D` and splits PATH entries), and the
+nodist npm shim needs its global npm pinned once via `nodist npm 10.2.3`
+(done 2026-09-26). For live-reload dev: `npm run dev` (vite proxies `/api`
+and `/ws` to :8770) and run the python server alongside. Python edits need a
+server restart; static/built assets reload.
 
 Tests: `python -m pytest` — the WebSocket tests boot a real loopback server
 and speak actual WebSocket (this starlette/anyio combo has a broken
