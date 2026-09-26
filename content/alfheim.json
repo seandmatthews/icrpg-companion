@@ -1,0 +1,42 @@
+{
+  "pack": "alfheim",
+  "label": "Alfheim starter kit",
+  "description": "Original table-companion flavor seeds for a first session in the elf lands. No rulebook text — homebrew flavor only.",
+  "targets": { "default": 12, "scene": 14 },
+  "loot": [
+    {
+      "name": "Moonwell Vial",
+      "tier": "uncommon",
+      "bonus": "Reroll one effort roll per session",
+      "description": "Water from a hidden spring, still glowing faintly at dusk."
+    },
+    {
+      "name": "Elfbone Whistle",
+      "tier": "common",
+      "bonus": "Call your mount once per session",
+      "description": "Carved from a shed antler. Elves find it charming; everyone else finds it loud."
+    },
+    {
+      "name": "Witchlight Ember",
+      "tier": "rare",
+      "bonus": "Light on demand, never burns out",
+      "description": "An ember wrapped in waxed cloth that never quite goes out."
+    },
+    {
+      "name": "Ruins Map Fragment",
+      "tier": "uncommon",
+      "bonus": "Reveals one site on the world map",
+      "description": "A corner of some older map, the ink still sharp where the blood dried."
+    },
+    {
+      "name": "Sergeant's Signet",
+      "tier": "uncommon",
+      "bonus": "+1 CHA with the garrison",
+      "description": "Warm to the touch, like a handshake that hasn't let go."
+    }
+  ],
+  "timers": [
+    { "label": "Patrol returns", "kind": "rounds", "rounds": 6 },
+    { "label": "Sundown", "kind": "alarm", "duration_s": 1800 }
+  ]
+}
