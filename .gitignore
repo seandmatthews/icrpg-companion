@@ -1,0 +1,18 @@
+# the local ICRPG rules PDF (copyrighted; personal reference only, never commit)
+*.pdf
+
+# runtime session snapshots (ephemeral by design, may hold table secrets)
+data/
+
+# client build + deps
+client/node_modules/
+client/dist/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# editor scratch
+.zcode/
