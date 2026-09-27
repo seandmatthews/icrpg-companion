@@ -20,17 +20,12 @@ from server import actions
 from server.app import create_app
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 def boot(data_dir: str, fresh: bool = True):
     app = create_app(data_dir, fresh=fresh)
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=_free_port(), log_level="error"))
+    # port=0: the OS binds an ephemeral port and we read the real one off
+    # the socket below — pre-binding and closing a probe socket had a
+    # classic TOCTOU window where another process could take the port
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.time() + 10
