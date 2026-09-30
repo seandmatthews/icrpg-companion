@@ -17,5 +17,5 @@ def seated_state(fresh_state):
     actions.apply_action(s, "gm", "GM", "pc_add", {"name": "Vex", "player_label": "Sam", "hearts_max": 3})
     actions.apply_action(s, "gm", "GM", "loot_add", {"name": "Ford signet ring", "tier": "uncommon"})
     actions.apply_action(s, "gm", "GM", "npc_add", {"name": "Sergeant Orla", "hearts_max": 1})
-    s["bindings"]["dev-1"] = {"pc_id": s["party"][0]["pc_id"], "player_name": "Sam"}
+    s["bindings"]["dev-1"] = {"pc_id": s["party"][0]["pc_id"]}
     return s

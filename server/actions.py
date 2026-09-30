@@ -27,6 +27,34 @@ def _need(args: dict, key: str) -> object:
     return v
 
 
+def _need_timer(state: dict, args: dict) -> dict:
+    t = st.find_timer(state, str(_need(args, "timer_id")))
+    if t is None:
+        raise ActionError("no such timer")
+    return t
+
+
+def _need_pc(state: dict, args: dict) -> dict:
+    pc = st.find_party(state, str(_need(args, "pc_id")))
+    if pc is None:
+        raise ActionError("no such pc")
+    return pc
+
+
+def _need_npc(state: dict, args: dict) -> dict:
+    npc = st.find_npc(state, str(_need(args, "npc_id")))
+    if npc is None:
+        raise ActionError("no such npc")
+    return npc
+
+
+def _need_item(state: dict, args: dict) -> dict:
+    item = st.find_item(state, str(_need(args, "item_id")))
+    if item is None:
+        raise ActionError("no such item")
+    return item
+
+
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -75,9 +103,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["timers"].append(st.new_timer(label, kind, duration, rounds))
 
     elif action == "timer_update":
-        t = st.find_timer(state, str(_need(args, "timer_id")))
-        if t is None:
-            raise ActionError("no such timer")
+        t = _need_timer(state, args)
         if "label" in args:
             t["label"] = st.sanitize_name(str(args["label"]), 60)
         if "duration_s" in args and t["kind"] == "alarm":
@@ -104,9 +130,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
             state["alarm"] = None
 
     elif action == "timer_start":
-        t = st.find_timer(state, str(_need(args, "timer_id")))
-        if t is None:
-            raise ActionError("no such timer")
+        t = _need_timer(state, args)
         if t["kind"] != "alarm":
             raise ActionError("rounds timers advance with timer_tick, not start")
         if t["status"] == "running":
@@ -125,9 +149,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         t["status"] = "paused"
 
     elif action == "timer_reset":
-        t = st.find_timer(state, str(_need(args, "timer_id")))
-        if t is None:
-            raise ActionError("no such timer")
+        t = _need_timer(state, args)
         t["status"] = "idle"
         t["started_at"] = None
         t["elapsed_before_pause"] = 0.0
@@ -163,9 +185,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         )
 
     elif action == "pc_update":
-        pc = st.find_party(state, str(_need(args, "pc_id")))
-        if pc is None:
-            raise ActionError("no such pc")
+        pc = _need_pc(state, args)
         if "name" in args:
             pc["name"] = st.sanitize_name(str(args["name"]), 40) or pc["name"]
         if "player_label" in args:
@@ -186,9 +206,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
                 item["claimed_by"] = None
 
     elif action == "pc_hearts":
-        pc = st.find_party(state, str(_need(args, "pc_id")))
-        if pc is None:
-            raise ActionError("no such pc")
+        pc = _need_pc(state, args)
         pc["hearts"] = _shift_hearts(pc["hearts"], pc["hearts_max"], float(_need(args, "delta")))
 
     elif action == "npc_add":
@@ -205,9 +223,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["npcs"].append(st.new_npc(name, hearts, die, abilities, bool(args.get("visible", False))))
 
     elif action == "npc_update":
-        npc = st.find_npc(state, str(_need(args, "npc_id")))
-        if npc is None:
-            raise ActionError("no such npc")
+        npc = _need_npc(state, args)
         if "name" in args:
             npc["name"] = st.sanitize_name(str(args["name"]), 40) or npc["name"]
         if "hearts_max" in args:
@@ -228,18 +244,14 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["npcs"] = [n for n in state["npcs"] if n["npc_id"] != nid]
 
     elif action == "npc_reveal":
-        npc = st.find_npc(state, str(_need(args, "npc_id")))
-        if npc is None:
-            raise ActionError("no such npc")
+        npc = _need_npc(state, args)
         npc["visible"] = bool(args.get("visible", True))
         st.add_log(
             state, actor, f"{npc['name']} {'takes the stage' if npc['visible'] else 'steps back into the shadows'}"
         )
 
     elif action == "npc_hearts":
-        npc = st.find_npc(state, str(_need(args, "npc_id")))
-        if npc is None:
-            raise ActionError("no such npc")
+        npc = _need_npc(state, args)
         npc["hearts"] = _shift_hearts(npc["hearts"], npc["hearts_max"], float(_need(args, "delta")))
 
     elif action == "loot_add":
@@ -259,9 +271,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         )
 
     elif action == "loot_update":
-        item = st.find_item(state, str(_need(args, "item_id")))
-        if item is None:
-            raise ActionError("no such item")
+        item = _need_item(state, args)
         if "name" in args:
             item["name"] = st.sanitize_name(str(args["name"]), 60) or item["name"]
         if "tier" in args:
@@ -278,9 +288,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["loot"] = [i for i in state["loot"] if i["item_id"] != iid]
 
     elif action == "loot_assign":
-        item = st.find_item(state, str(_need(args, "item_id")))
-        if item is None:
-            raise ActionError("no such item")
+        item = _need_item(state, args)
         pc_id = args.get("pc_id")
         if pc_id is None:
             if item["claimed_by"] is None:
@@ -298,27 +306,23 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         req = next((r for r in state["join_requests"] if r["device_token"] == token), None)
         if req is None:
             raise ActionError("no such join request")
-        pc = st.find_party(state, str(_need(args, "pc_id")))
-        if pc is None:
-            raise ActionError("no such pc")
+        pc = _need_pc(state, args)
         _require_unbound(state, pc["pc_id"])
-        state["join_requests"] = [r for r in state["join_requests"] if r["device_token"] != token]
-        state["bindings"][token] = {"pc_id": pc["pc_id"], "player_name": req["name"]}
+        st.drop_join_request(state, token)
+        state["bindings"][token] = {"pc_id": pc["pc_id"]}
         st.add_log(state, actor, f"{req['name']} sat down as {pc['name']}")
 
     elif action == "reject_join":
         token = str(_need(args, "device_token"))
         req = next((r for r in state["join_requests"] if r["device_token"] == token), None)
-        state["join_requests"] = [r for r in state["join_requests"] if r["device_token"] != token]
+        st.drop_join_request(state, token)
         if req:
             st.add_log(state, actor, f"turned {req['name']} away", audience="gm")
 
     elif action == "milestone_add":
-        pc = st.find_party(state, str(_need(args, "pc_id")))
-        if pc is None:
-            raise ActionError("no such pc")
+        pc = _need_pc(state, args)
         reason = st.sanitize_name(str(_need(args, "reason")), 140)
-        state["milestones"].append({"pc_id": pc["pc_id"], "pc_name": pc["name"], "reason": reason, "ts": _now_iso()})
+        state["milestones"].append({"pc_id": pc["pc_id"], "pc_name": pc["name"], "reason": reason, "ts": st.now_iso()})
         st.add_log(state, actor, f"{pc['name']} earned a milestone — {reason}")
 
     elif action == "milestone_delete":
@@ -359,11 +363,9 @@ def _player_action(state: dict, actor: str, pc_id: str, action: str, args: dict)
         raise ActionError("your character no longer exists — ask the GM for a new seat")
 
     if action == "player_claim":
-        item = st.find_item(state, str(_need(args, "item_id")))
-        if item is None:
-            raise ActionError("no such item")
+        item = _need_item(state, args)
         if item["claimed_by"] is not None:
-            raise ActionError(f"already claimed")
+            raise ActionError("already claimed")
         item["claimed_by"] = pc_id
         st.add_log(state, actor, f"{pc['name']} claimed {item['name']}")
 
@@ -379,12 +381,6 @@ def _player_action(state: dict, actor: str, pc_id: str, action: str, args: dict)
 
     else:
         raise ActionError(f"unknown player action '{action}'")
-
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------------------

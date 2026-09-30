@@ -1,8 +1,5 @@
-import { useState } from "react";
-
 function Heart({ fill }: { fill: "full" | "half" | "empty" }) {
   if (fill === "half") {
-    // half = left half red, right half paper, using a clipped overlay
     return (
       <span className="heart">
         <span className="heart-empty">♥</span>
@@ -16,7 +13,7 @@ function Heart({ fill }: { fill: "full" | "half" | "empty" }) {
 export function Hearts({ current, max, size }: { current: number; max: number; size?: "lg" }) {
   const whole = Math.floor(current);
   const half = current - whole >= 0.25 && current - whole < 0.75 ? 1 : 0;
-  const filled = whole + (half && current - whole >= 0.75 ? 1 : 0);
+  const filled = Math.round(current);
   const cells: ("full" | "half" | "empty")[] = [];
   for (let i = 0; i < max; i++) {
     if (i < whole) cells.push("full");
@@ -42,18 +39,13 @@ export function HeartStepper({
   max: number;
   onDelta: (delta: number) => void;
 }) {
-  const [bump, setBump] = useState(0);
-  const tap = (d: number) => {
-    onDelta(d);
-    setBump((b) => b + 1);
-  };
   return (
-    <span className="heart-stepper" key={bump}>
-      <button className="btn btn-sm" onClick={() => tap(-1)} aria-label="damage">
+    <span className="heart-stepper">
+      <button className="btn btn-sm" onClick={() => onDelta(-1)} aria-label="damage">
         −
       </button>
       <Hearts current={current} max={max} size="lg" />
-      <button className="btn btn-sm" onClick={() => tap(1)} aria-label="heal">
+      <button className="btn btn-sm" onClick={() => onDelta(1)} aria-label="heal">
         +
       </button>
     </span>

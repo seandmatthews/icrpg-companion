@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 
 // ---------------------------------------------------------------------------
-// local storage identity: the device token is what the server re-binds seats
-// with; the cached view gives returning phones an instant paint and is purely
-// a mirror — the server snapshot is the real backup.
+// local storage identity: the device token re-binds seats; the cached view is
+// an instant-paint mirror only (see net.ts) — the server snapshot is the backup.
 // ---------------------------------------------------------------------------
 
 const DEVICE_KEY = "tc_device";
@@ -130,13 +129,4 @@ export function timerRemainSec(
 ): number | null {
   if (t.kind !== "alarm" || t.status !== "running" || t.started_at == null || t.duration_s == null) return null;
   return t.started_at + t.duration_s - (now + skew);
-}
-
-export function urlBase64Bytes(b64: string): Uint8Array {
-  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-  const s = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(s);
-  const arr = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-  return arr;
 }

@@ -20,10 +20,9 @@ CLIENT_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 
 def detect_lan_ip() -> str | None:
-    """Best-effort LAN IP for the QR code. The UDP connect picks a route
-    without sending packets; home-LAN ranges (192.168.x) are preferred over
-    whatever VPN/Tailscale adapter answers first. Failure falls back to the
-    hostname, then None."""
+    """Best-effort LAN IP for the QR code: UDP connect() picks a route without
+    sending packets; home-LAN ranges beat VPN/Tailscale adapters. Falls back
+    to the hostname, then None."""
     candidates: list[str] = []
     for target in (("8.8.8.8", 80), ("192.168.0.1", 80)):
         try:
@@ -149,7 +148,7 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
             if conn in room.conns:
                 room.conns.remove(conn)
             # a pending player who left is a ghost knock — clear it for the GM
-            if conn.role == "pending" and conn.device_token and room.drop_join_request(conn.device_token):
+            if conn.role == "pending" and conn.device_token and st.drop_join_request(room.state, conn.device_token):
                 room.commit()
                 await room.broadcast_to_gms()
 

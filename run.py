@@ -26,7 +26,7 @@ def main() -> None:
     args = parser.parse_args()
 
     app = create_app(args.data_dir, fresh=args.fresh)
-    state = app.state_model  # set by create_app via attribute below
+    state = app.state_model  # attribute set by create_app()
 
     lan_ip = detect_lan_ip()
     gm_url = f"http://localhost:{args.port}"

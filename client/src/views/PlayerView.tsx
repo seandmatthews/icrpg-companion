@@ -3,19 +3,14 @@ import type { Item } from "../types";
 import type { RoomConn } from "../net";
 import { useNow, useWakeLock } from "../util";
 import { HeartStepper } from "../components/Hearts";
+import { LootCardBody } from "../components/LootCard";
 import { TNCard } from "../components/TNCard";
 import { TimerStatus } from "../components/Timers";
 
-function LootCard({ item, onClaim }: { item: Item; onClaim: (item: Item) => void }) {
+function PoolCard({ item, onClaim }: { item: Item; onClaim: (item: Item) => void }) {
   const [claiming, setClaiming] = useState(false);
   return (
-    <div className={`loot-card tier-${item.tier} ${claiming ? "claiming" : ""}`}>
-      <div className="loot-head">
-        <strong>{item.name}</strong>
-        <span className={`tier tier-${item.tier}`}>{item.tier}</span>
-      </div>
-      {item.bonus && <div className="loot-bonus">{item.bonus}</div>}
-      {item.description && <div className="loot-desc">{item.description}</div>}
+    <LootCardBody item={item} className={claiming ? "claiming" : undefined}>
       <button
         className="btn btn-go btn-claim"
         onClick={() => {
@@ -25,7 +20,7 @@ function LootCard({ item, onClaim }: { item: Item; onClaim: (item: Item) => void
       >
         Claim
       </button>
-    </div>
+    </LootCardBody>
   );
 }
 
@@ -102,17 +97,11 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
         <h2 className="card-title">Your pack</h2>
         <div className="loot-grid">
           {mine.map((i) => (
-            <div key={i.item_id} className={`loot-card tier-${i.tier} loot-enter`}>
-              <div className="loot-head">
-                <strong>{i.name}</strong>
-                <span className={`tier tier-${i.tier}`}>{i.tier}</span>
-              </div>
-              {i.bonus && <div className="loot-bonus">{i.bonus}</div>}
-              {i.description && <div className="loot-desc">{i.description}</div>}
+            <LootCardBody key={i.item_id} item={i} className="loot-enter">
               <button className="btn btn-sm" onClick={() => send("player_return", { item_id: i.item_id })}>
                 Toss back
               </button>
-            </div>
+            </LootCardBody>
           ))}
           {mine.length === 0 && <p className="hint">Nothing yet — grab something from the pool below.</p>}
         </div>
@@ -122,7 +111,7 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
         <h2 className="card-title">Loot pool</h2>
         <div className="loot-grid">
           {pool.map((i) => (
-            <LootCard key={i.item_id} item={i} onClaim={(item) => send("player_claim", { item_id: item.item_id })} />
+            <PoolCard key={i.item_id} item={i} onClaim={(item) => send("player_claim", { item_id: item.item_id })} />
           ))}
           {pool.length === 0 && <p className="hint">The pool is empty.</p>}
         </div>

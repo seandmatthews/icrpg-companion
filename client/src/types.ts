@@ -21,7 +21,6 @@ export interface Item {
   bonus: string;
   description: string;
   claimed_by: string | null;
-  minted: boolean;
 }
 
 export interface PC {
@@ -73,7 +72,7 @@ export interface StateView {
   npcs?: NPC[];
   loot?: Item[];
   join_requests?: JoinRequest[];
-  bindings?: Record<string, { pc_id: string; player_name: string }>;
+  bindings?: Record<string, { pc_id: string }>;
   log?: LogEntry[];
   milestones?: Milestone[];
   alarm: { timer_id: string; label: string } | null;

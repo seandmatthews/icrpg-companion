@@ -34,6 +34,10 @@ def now() -> float:
     return time.time()
 
 
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> dict:
     return {
         "schema": SCHEMA,
@@ -49,7 +53,7 @@ def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> d
         "npcs": [],
         "loot": [],
         "join_requests": [],
-        # device_token -> {"pc_id": ..., "player_name": ...}
+        # device_token -> {"pc_id": ...}
         "bindings": {},
         "log": [],  # {ts, audience: "all"|"gm", actor, text}
         "milestones": [],  # {pc_id, reason, ts}
@@ -60,7 +64,7 @@ def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> d
 def add_log(state: dict, actor: str, text: str, audience: str = "all") -> None:
     state["log"].append(
         {
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ts": now_iso(),
             "audience": audience,
             "actor": actor,
             "text": text,
@@ -68,6 +72,14 @@ def add_log(state: dict, actor: str, text: str, audience: str = "all") -> None:
     )
     if len(state["log"]) > LOG_CAP:
         del state["log"][: len(state["log"]) - LOG_CAP]
+
+
+def drop_join_request(state: dict, device_token: str) -> bool:
+    before = len(state["join_requests"])
+    state["join_requests"] = [
+        r for r in state["join_requests"] if r["device_token"] != device_token
+    ]
+    return len(state["join_requests"]) < before
 
 
 def find_party(state: dict, pc_id: str) -> dict | None:
@@ -125,7 +137,7 @@ def new_npc(name: str, hearts_max: float, effort_die: str, abilities: list[str],
     }
 
 
-def new_item(name: str, tier: str, bonus: str, description: str, minted: bool = False) -> dict:
+def new_item(name: str, tier: str, bonus: str, description: str) -> dict:
     return {
         "item_id": id4("it"),
         "name": name,
@@ -133,7 +145,6 @@ def new_item(name: str, tier: str, bonus: str, description: str, minted: bool = 
         "bonus": bonus,
         "description": description,
         "claimed_by": None,  # pc_id once claimed/assigned
-        "minted": minted,  # minted at the table vs. prepped
     }
 
 
@@ -210,7 +221,7 @@ def _gm_view(state: dict) -> dict:
     return view
 
 
-def view_for(state: dict, role: str, pc_id: str | None = None, device_token: str | None = None) -> dict:
+def view_for(state: dict, role: str, pc_id: str | None = None) -> dict:
     if role == "gm":
         return _gm_view(state)
     if role == "player" and pc_id:

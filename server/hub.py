@@ -36,12 +36,10 @@ class Room:
     # -- fan-out --------------------------------------------------------------
 
     def refresh_seats(self) -> None:
-        """Re-derive every non-GM connection's seat from state before sending.
+        """Re-derive every non-GM seat from state before sending.
 
-        This is what makes approval/disconnect flows work without bookkeeping
-        in the action handlers: approve_join writes a binding, and the next
-        broadcast flips the pending socket to seated; pc_delete or
-        session_reset silently unseats the affected sockets again.
+        This is why approve_join/pc_delete need no socket bookkeeping: the
+        binding write (or removal) takes effect on the next broadcast.
         """
         for conn in self.conns:
             if conn.role == "gm":
@@ -87,18 +85,10 @@ class Room:
 
     # -- join lifecycle -------------------------------------------------------
 
-    def drop_join_request(self, device_token: str) -> bool:
-        before = len(self.state["join_requests"])
-        self.state["join_requests"] = [
-            r for r in self.state["join_requests"] if r["device_token"] != device_token
-        ]
-        return len(self.state["join_requests"]) < before
-
     def handle_hello_player(self, conn: Connection, device_token: str, name: str) -> None:
-        """Bind or re-bind a player seat. Reconnects with a known device token
-        restore the same seat — that, plus the server snapshot, is the whole
-        'lost phone' recovery story (new device = GM re-binds the same PC,
-        whose hearts/inventory live server-side)."""
+        """Bind or re-bind a seat: a known device_token restores the same PC.
+        With the server snapshot this is the whole 'lost phone' recovery — a new
+        device just gets re-bound by the GM; hearts/inventory live server-side."""
         conn.device_token = device_token
         conn.name = st.sanitize_name(name, 40) or "Player"
         binding = self.state["bindings"].get(device_token)

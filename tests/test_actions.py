@@ -21,19 +21,17 @@ def test_pc_hearts_clamp_to_bounds(seated_state):
 
 def test_player_can_shift_own_hearts_only(seated_state):
     pc = seated_state["party"][0]
-    other = dict(seated_state)
     act(seated_state, "pc_add", {"name": "Brann"})
     brann = seated_state["party"][1]
     act(seated_state, "player_hearts", {"delta": -1}, role="player", actor="Sam", pc_id=pc["pc_id"])
     assert pc["hearts"] == pc["hearts_max"] - 1
     with pytest.raises(ActionError):
         act(seated_state, "pc_hearts", {"pc_id": brann["pc_id"], "delta": -1}, role="player", pc_id=pc["pc_id"])
-    del other
 
 
 def test_npc_partial_hearts(seated_state):
     npc = seated_state["npcs"][0]
-    act(seated_state, "npc_hearts", {"pc_id": npc["npc_id"], "npc_id": npc["npc_id"], "delta": -0.5})
+    act(seated_state, "npc_hearts", {"npc_id": npc["npc_id"], "delta": -0.5})
     assert npc["hearts"] == 0.5
 
 

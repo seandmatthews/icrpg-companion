@@ -594,15 +594,6 @@ input[type="number"] {
   font-size: 0.8rem;
 }
 
-.minted {
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  border: 1px dashed var(--ink-soft);
-  border-radius: 4px;
-  padding: 0 0.3rem;
-}
-
 .loot-enter {
   animation: enter 0.35s ease-out;
 }
