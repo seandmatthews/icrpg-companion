@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import type { Bootstrap, Item, StateView } from "../types";
+import type { Bootstrap, StateView } from "../types";
 import type { RoomConn } from "../net";
 import { useNow, useWakeLock } from "../util";
 import { HeartStepper } from "../components/Hearts";
+import { LootCardBody } from "../components/LootCard";
 import { TNCard } from "../components/TNCard";
 import { TimerGM } from "../components/Timers";
 
@@ -140,51 +141,6 @@ function AddNpcForm({ send }: { send: RoomConn["send"] }) {
   );
 }
 
-function LootCard({ item, party, send }: { item: Item; party: NonNullable<StateView["party"]>; send: RoomConn["send"] }) {
-  const owner = party.find((p) => p.pc_id === item.claimed_by);
-  return (
-    <div className={`loot-card tier-${item.tier}`}>
-      <div className="loot-head">
-        <strong>{item.name}</strong>
-        <span className={`tier tier-${item.tier}`}>{item.tier}</span>
-        {item.minted && <span className="minted" title="minted at the table">table</span>}
-      </div>
-      {item.bonus && <div className="loot-bonus">{item.bonus}</div>}
-      {item.description && <div className="loot-desc">{item.description}</div>}
-      <div className="loot-foot">
-        {owner ? (
-          <>
-            <span className="owner">→ {owner.name}</span>
-            <button className="btn btn-sm" onClick={() => send("loot_assign", { item_id: item.item_id, pc_id: null })}>
-              Recall
-            </button>
-          </>
-        ) : (
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value) send("loot_assign", { item_id: item.item_id, pc_id: e.target.value });
-              e.target.value = "";
-            }}
-          >
-            <option value="" disabled>
-              assign to…
-            </option>
-            {party.map((p) => (
-              <option key={p.pc_id} value={p.pc_id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <button className="btn btn-sm btn-ghost" onClick={() => send("loot_delete", { item_id: item.item_id })}>
-          ✕
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function exportReport(v: StateView) {
   const loot = v.loot ?? [];
   const party = v.party ?? [];
@@ -195,7 +151,6 @@ function exportReport(v: StateView) {
     session_id: v.session_id,
     played_on: new Date().toISOString().slice(0, 10),
     loot_claimed: loot.filter((i) => i.claimed_by).map((i) => ({ item_id: i.item_id, name: i.name, pc_id: i.claimed_by, pc_name: nameOf(i.claimed_by) })),
-    loot_created: loot.filter((i) => i.minted).map((i) => ({ name: i.name, tier: i.tier, pc_id: i.claimed_by, pc_name: nameOf(i.claimed_by) })),
     milestones: v.milestones ?? [],
     notable_events: (v.log ?? []).filter((e) => e.audience === "all").map((e) => ({ actor: e.actor, text: e.text, ts: e.ts })),
     session_summary: "",
@@ -390,9 +345,43 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn; bootstrap: Bootstr
 
           <Card title="Loot pool">
             <div className="loot-grid">
-              {loot.map((i) => (
-                <LootCard key={i.item_id} item={i} party={party} send={send} />
-              ))}
+              {loot.map((i) => {
+                const owner = party.find((p) => p.pc_id === i.claimed_by);
+                return (
+                  <LootCardBody key={i.item_id} item={i}>
+                    <div className="loot-foot">
+                      {owner ? (
+                        <>
+                          <span className="owner">→ {owner.name}</span>
+                          <button className="btn btn-sm" onClick={() => send("loot_assign", { item_id: i.item_id, pc_id: null })}>
+                            Recall
+                          </button>
+                        </>
+                      ) : (
+                        <select
+                          defaultValue=""
+                          onChange={(e) => {
+                            if (e.target.value) send("loot_assign", { item_id: i.item_id, pc_id: e.target.value });
+                            e.target.value = "";
+                          }}
+                        >
+                          <option value="" disabled>
+                            assign to…
+                          </option>
+                          {party.map((p) => (
+                            <option key={p.pc_id} value={p.pc_id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <button className="btn btn-sm btn-ghost" onClick={() => send("loot_delete", { item_id: i.item_id })}>
+                        ✕
+                      </button>
+                    </div>
+                  </LootCardBody>
+                );
+              })}
             </div>
             <AddLootForm send={send} />
             {loot.length === 0 && (

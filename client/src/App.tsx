@@ -135,7 +135,7 @@ export default function App() {
   const [gmFlow, setGmFlow] = useState(() => !!getGmKey());
   const seat = getSeat();
   if (location.pathname === "/join") return <PlayerFlow initialSeat={seat} />;
-  if (gmFlow) return <GMFlow />; // shows the key form when no key is stored yet
+  if (gmFlow) return <GMFlow />;
   if (seat) return <PlayerFlow initialSeat={seat} />; // returning player reopened the PWA
   return <Landing onGM={() => setGmFlow(true)} />;
 }

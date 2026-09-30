@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { StateView } from "./types";
 import { cacheView, cachedView, getDevice } from "./util";
 
-export type Role = "gm" | "player";
-export type ConnStatus = "connecting" | "open" | "closed";
+type Role = "gm" | "player";
+type ConnStatus = "connecting" | "open" | "closed";
 
 export interface RoomConn {
   status: ConnStatus;
