@@ -1,5 +1,6 @@
 # 32 — table-companion: hub robustness (watcher, frames, partial mutations)
 
+**Status:** proposed — parked (table-companion not in use; backlog for when that changes).
 **Priority:** P2 — separate repo (`table-companion/`), own commits
 **Area:** `table-companion/server/hub.py`, `server/app.py`, `server/actions.py`,
 `server/content.py`

@@ -1,5 +1,6 @@
 # 33 — table-companion: join/reject lifecycle + client type honesty
 
+**Status:** proposed — parked (table-companion not in use; backlog for when that changes).
 **Priority:** P3 — separate repo (`table-companion/`), own commits
 **Area:** `table-companion/server/actions.py` (reject_join), `server/hub.py`,
 `client/src/types.ts`, `client/src/net.ts`, `client/src/util.ts`
