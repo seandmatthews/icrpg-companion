@@ -11,6 +11,8 @@ shared loot pool with a claim flow, and snapshot persistence. The studio seam
 (`session-manifest` in, `session-report` out) is v1.5; the GM console already
 downloads a `session-report/v0.1`-shaped JSON. Design record: [DESIGN.md](DESIGN.md).
 
+**Currently deprioritized** — possibly to be resumed later
+
 ## Run it
 
 ```
@@ -61,7 +63,8 @@ scripts/make_icons.py pure-stdlib PNG icon generator (run once, output committed
 
 Client (from `client/`): `npm run build`. Two machine quirks are already
 handled: `client/.npmrc` routes npm scripts through Git Bash (cmd.exe
-mis-parses the `&` in `Documents\D&D` and splits PATH entries), and the
+mis-parses a literal `&` in the working path — this repo originally lived
+under `Documents\D&D`; the .npmrc is harmless elsewhere), and the
 nodist npm shim needs its global npm pinned once via `nodist npm 10.2.3`
 (done 2026-09-26). For live-reload dev: `npm run dev` (vite proxies `/api`
 and `/ws` to :8770) and run the python server alongside. Python edits need a
