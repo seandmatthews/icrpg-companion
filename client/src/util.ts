@@ -158,10 +158,24 @@ export function fmtClock(totalSeconds: number): string {
 }
 
 export function timerRemainSec(
-  t: { kind: "alarm" | "rounds"; status: string; started_at: number | null; duration_s: number | null },
+  t: {
+    kind: "alarm" | "rounds";
+    status: string;
+    started_at: number | null;
+    duration_s: number | null;
+    elapsed_before_pause?: number;
+  },
   skew: number,
   now: number
 ): number | null {
-  if (t.kind !== "alarm" || t.status !== "running" || t.started_at == null || t.duration_s == null) return null;
-  return t.started_at + t.duration_s - (now + skew);
+  if (t.kind !== "alarm" || t.duration_s == null) return null;
+  if (t.status === "running") {
+    if (t.started_at == null) return null;
+    return t.started_at + t.duration_s - (now + skew);
+  }
+  // honesty for the player view (ticket 39): a paused timer shows what's
+  // actually left (frozen), a done timer shows 0:00 — never the full duration
+  if (t.status === "paused") return t.duration_s - (t.elapsed_before_pause ?? 0);
+  if (t.status === "done") return 0;
+  return null; // idle
 }

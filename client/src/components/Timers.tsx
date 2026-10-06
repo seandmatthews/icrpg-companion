@@ -15,17 +15,20 @@ function Countdown({ timer, skew, now }: { timer: Timer; skew: number; now: numb
   if (remain == null) {
     return <span className="countdown countdown-idle">{fmtClock(timer.duration_s ?? 0)}</span>;
   }
-  const cls = remain <= 30 ? "countdown countdown-hot" : "countdown";
+  const cls = remain > 0 && remain <= 30 ? "countdown countdown-hot" : "countdown";
   return <span className={cls}>{fmtClock(remain)}</span>;
 }
 
 export function TimerStatus({ timer, skew, now }: { timer: Timer; skew: number; now: number }) {
   const remain = timerRemainSec(timer, skew, now);
-  const urgent = remain != null && remain <= 30;
+  const urgent = remain != null && remain <= 30 && remain > 0;
   return (
     <div className={`timer ${urgent ? "timer-hot" : ""} ${timer.status === "done" ? "timer-done" : ""}`}>
       <div className="timer-label">{timer.label}</div>
       <Countdown timer={timer} skew={skew} now={now} />
+      {timer.status !== "idle" && (
+        <span className={`timer-state state-${timer.status}`}>{timer.status}</span>
+      )}
     </div>
   );
 }

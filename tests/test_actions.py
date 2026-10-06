@@ -520,3 +520,14 @@ def test_snapshot_old_single_alarm_dict_becomes_queue(tmp_path):
     state, reason = st.load_snapshot(str(tmp_path))
     assert state["alarm"] == [{"timer_id": "tm_1", "label": "old"}]
     assert reason is None
+
+
+def test_claim_announcement_is_player_audience(seated_state):
+    # pins the server half of the player-facing table log (ticket 39): the
+    # claim announcement the client renders must be audience "all"
+    item = seated_state["loot"][0]
+    pc = seated_state["party"][0]
+    act(seated_state, "player_claim", {"item_id": item["item_id"]}, role="player", actor="Sam", pc_id=pc["pc_id"])
+    entry = seated_state["log"][-1]
+    assert entry["audience"] == "all"
+    assert "claimed" in entry["text"] and pc["name"] in entry["text"]

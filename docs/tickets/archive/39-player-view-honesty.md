@@ -1,6 +1,6 @@
 # 39 — player-view honesty: countdowns, table log, hush, claim rollback
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds); manual phone click-throughs pending user verification.
 **Priority:** P2
 **Area:** `client/src/components/Timers.tsx`, `client/src/util.ts`
 (timerRemainSec), `client/src/views/PlayerView.tsx`
@@ -83,4 +83,33 @@ one server-side assertion that guards the log payload:
 - [ ] Manual: GM deletes the seated PC → the player's dead-end screen
       has a working "Knock again" affordance that produces a knock in
       the GM panel.
-- [ ] `npm run build` green.
+- [x] `npm run build` green.
+
+## Implementation notes (2026-10-06)
+
+Landed in `client/src/util.ts` (timerRemainSec), `components/Timers.tsx`,
+`views/PlayerView.tsx`, `client/src/styles.css`, `tests/test_actions.py`:
+
+- Countdown honesty: paused timers render `duration_s −
+  elapsed_before_pause` frozen; done timers render 0:00 (dimmed, not hot);
+  idle keeps the full duration; a paused/done/running state chip now shows
+  on player timer rows (new .state-paused/.state-done chip colors).
+- Table log: PlayerView renders the server-filtered audience-"all" entries
+  (same markup/styles as the GM console) — "players see it" notes and claim
+  announcements are finally visible to the table. Server half pinned by
+  `test_claim_announcement_is_player_audience`.
+- Hush re-arms: an effect clears `hushed` whenever the alarm list no longer
+  contains the hushed timer — only the current ring can be hushed; a
+  reset/restart/expiry cycle rings again.
+- Claim flow: in-flight mark lifted to the parent (`claimingId`), button
+  disabled while claiming (double-tap killed), rollback on the next error
+  frame AND on the success echo (review round 1 caught that a toss-back
+  resurrected a permanently dimmed card — success-path reset added).
+- Seat-vanished screen now has a working "Knock again" button (clears saved
+  seat + cache, reloads to the join form; the re-knock reaches the GM panel
+  via ticket 37's machinery).
+- Deviations: none of substance. Hook discipline preserved (all effects
+  above the early returns; `alarms`/`lootNow` computed defensively for the
+  null/pending views).
+- Manual click-through criteria left unticked pending user phone
+  verification. Gates: `python -m pytest` — 87 passed; `npm run build` green.
