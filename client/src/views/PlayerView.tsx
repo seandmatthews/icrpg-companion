@@ -1,22 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Item } from "../types";
 import type { RoomConn } from "../net";
-import { useNow, useWakeLock } from "../util";
+import { clearCachedView, setSeat, useNow, useWakeLock } from "../util";
 import { HeartStepper } from "../components/Hearts";
 import { LootCardBody } from "../components/LootCard";
 import { TNCard } from "../components/TNCard";
 import { TimerStatus } from "../components/Timers";
 
-function PoolCard({ item, onClaim }: { item: Item; onClaim: (item: Item) => void }) {
-  const [claiming, setClaiming] = useState(false);
+function PoolCard({ item, claiming, onClaim }: { item: Item; claiming: boolean; onClaim: (item: Item) => void }) {
   return (
     <LootCardBody item={item} className={claiming ? "claiming" : undefined}>
       <button
         className="btn btn-go btn-claim"
-        onClick={() => {
-          setClaiming(true);
-          onClaim(item);
-        }}
+        disabled={claiming}
+        onClick={() => onClaim(item)}
       >
         Claim
       </button>
@@ -40,6 +37,30 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
   const now = useNow(500);
   useWakeLock(true);
   const [hushed, setHushed] = useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [lastErrorTs, setLastErrorTs] = useState(0);
+  // claim-in-progress rolls back on the next error frame, and the disabled
+  // button kills the double-tap that produced a self-condemning toast
+  useEffect(() => {
+    if (conn.error && conn.error.ts !== lastErrorTs) {
+      setLastErrorTs(conn.error.ts);
+      setClaimingId(null);
+    }
+  }, [conn.error, lastErrorTs]);
+  // success path: once the claimed item shows claimed_by (by anyone), the
+  // in-flight mark has resolved — otherwise a toss-back would resurrect a
+  // permanently dimmed card
+  const lootNow = view && view.status !== "pending" ? view.loot ?? [] : [];
+  useEffect(() => {
+    if (claimingId && lootNow.some((i) => i.item_id === claimingId && i.claimed_by != null)) {
+      setClaimingId(null);
+    }
+  }, [lootNow, claimingId]);
+  // hushing re-arms when the alarm clears: only the CURRENT ring can be hushed
+  const alarms = view && view.status !== "pending" ? view.alarm ?? [] : [];
+  useEffect(() => {
+    if (hushed && !alarms.some((a) => a.timer_id === hushed)) setHushed(null);
+  }, [alarms, hushed]);
 
   if (!view) return <div className="screen-center">connecting to the table…</div>;
   if (view.status === "pending") {
@@ -66,13 +87,31 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
   }
 
   const me = (view.party ?? []).find((p) => p.pc_id === view.you?.pc_id);
-  if (!me) return <div className="screen-center">your seat vanished — ask the GM for a new one</div>;
+  if (!me)
+    return (
+      <div className="screen-center">
+        <div className="card pending-card">
+          <h2>Your seat vanished</h2>
+          <p className="hint">The GM removed this character — you can knock again.</p>
+          <button
+            className="btn"
+            onClick={() => {
+              setSeat(null);
+              clearCachedView();
+              location.reload();
+            }}
+          >
+            Knock again
+          </button>
+        </div>
+      </div>
+    );
 
   const loot = view.loot ?? [];
   const mine = loot.filter((i) => i.claimed_by === me.pc_id);
   const pool = loot.filter((i) => i.claimed_by === null);
   // the alarm slot is a queue — show the first ring this player hasn't hushed
-  const ringing = (view.alarm ?? []).find((a) => a.timer_id !== hushed);
+  const ringing = alarms.find((a) => a.timer_id !== hushed);
 
   return (
     <div className="player-view">
@@ -123,9 +162,32 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
         <h2 className="card-title">Loot pool</h2>
         <div className="loot-grid">
           {pool.map((i) => (
-            <PoolCard key={i.item_id} item={i} onClaim={(item) => send("player_claim", { item_id: item.item_id })} />
+            <PoolCard
+              key={i.item_id}
+              item={i}
+              claiming={claimingId === i.item_id}
+              onClaim={(item) => {
+                setClaimingId(item.item_id);
+                send("player_claim", { item_id: item.item_id });
+              }}
+            />
           ))}
           {pool.length === 0 && <p className="hint">The pool is empty.</p>}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2 className="card-title">Table log</h2>
+        <div className="log-list">
+          {(view.log ?? [])
+            .slice()
+            .reverse()
+            .map((e, i) => (
+              <div key={i} className="log-entry">
+                <span className="log-actor">{e.actor}</span> {e.text}
+              </div>
+            ))}
+          {(view.log ?? []).length === 0 && <p className="hint">Nothing logged yet.</p>}
         </div>
       </section>
 

@@ -350,6 +350,12 @@ input[type="number"] {
   color: var(--green);
   font-weight: 700;
 }
+.state-paused {
+  color: var(--amber, #d9a441);
+}
+.state-done {
+  color: var(--red, #c22f2f);
+}
 
 .rounds {
   font-size: 1.2rem;
