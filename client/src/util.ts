@@ -8,7 +8,9 @@ import { useEffect, useState } from "react";
 const DEVICE_KEY = "tc_device";
 const GM_KEY = "tc_gmkey";
 const SEAT_KEY = "tc_seat"; // {room, name}
-const VIEW_KEY = "tc_view";
+// the instant-paint view cache is scoped per role — one browser can host the
+// GM console and a player seat, and they must never cross-paint (ticket 33)
+const VIEW_KEYS: Record<"gm" | "player", string> = { gm: "tc_view_gm", player: "tc_view_player" };
 
 // crypto.randomUUID exists only in secure contexts (https / localhost); the
 // table serves plain http://<lan-ip>, so phones must take the getRandomValues
@@ -79,17 +81,17 @@ export function setSeat(seat: Seat | null) {
   else localStorage.removeItem(SEAT_KEY);
 }
 
-export function cacheView(v: unknown) {
+export function cacheView(v: unknown, role: "gm" | "player") {
   try {
-    localStorage.setItem(VIEW_KEY, JSON.stringify(v));
+    localStorage.setItem(VIEW_KEYS[role], JSON.stringify(v));
   } catch {
     /* quota — the cache is a nicety, never fatal */
   }
 }
 
-export function cachedView(): unknown | null {
+export function cachedView(role: "gm" | "player"): unknown | null {
   try {
-    const raw = localStorage.getItem(VIEW_KEY);
+    const raw = localStorage.getItem(VIEW_KEYS[role]);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -97,7 +99,8 @@ export function cachedView(): unknown | null {
 }
 
 export function clearCachedView() {
-  localStorage.removeItem(VIEW_KEY);
+  localStorage.removeItem(VIEW_KEYS.gm);
+  localStorage.removeItem(VIEW_KEYS.player);
 }
 
 // ---------------------------------------------------------------------------

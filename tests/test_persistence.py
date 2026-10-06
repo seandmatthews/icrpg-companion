@@ -43,7 +43,7 @@ def test_snapshot_missing_keys_backfilled(tmp_path):
     (tmp_path / st._SNAPSHOT_NAME).write_text(json.dumps({"schema": st.SCHEMA}), encoding="utf-8")
     state, reason = st.load_snapshot(str(tmp_path))
     assert state is not None
-    for key in ("targets", "timers", "party", "npcs", "loot", "join_requests", "bindings", "log", "milestones", "alarm"):
+    for key in ("targets", "timers", "party", "npcs", "loot", "join_requests", "rejections", "bindings", "log", "milestones", "alarm"):
         assert key in state, key
     assert state["party"] == [] and state["bindings"] == {} and state["alarm"] is None
     # identity is backfilled and the repair is disclosed, never silent
@@ -108,6 +108,7 @@ def test_snapshot_full_shape_round_trip(tmp_path):
     s["bindings"]["dev-1"] = {"pc_id": pc["pc_id"]}
     s["log"].append({"ts": st.now_iso(), "audience": "gm", "actor": "GM", "text": "secret"})
     s["milestones"].append({"pc_id": pc["pc_id"], "pc_name": "Vex", "reason": "cleared the vault", "ts": st.now_iso()})
+    s["rejections"].append({"device_token": "dev-turned-away", "name": "Rando"})
     st.save_snapshot(s, str(tmp_path))
     loaded, reason = st.load_snapshot(str(tmp_path))
     assert reason is None

@@ -114,18 +114,24 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                         return
                     conn.role = "gm"
                     conn.device_token = str(msg.get("device_token") or "")
-                    await room.send_to(conn)
+                    try:
+                        await room.send_to(conn)
+                    except Exception:
+                        return  # client vanished mid-hello; finally cleans up
 
                 elif mtype == "hello_player":
                     if msg.get("room") != room.state["room_code"]:
                         await room.send_error(conn, "wrong room code", code="auth")
                         await ws.close(code=4002)
                         return
-                    room.handle_hello_player(
+                    knock_created = room.handle_hello_player(
                         conn, str(msg.get("device_token") or st.id4("dev")), str(msg.get("name") or "Player")
                     )
-                    await room.send_to(conn)
-                    if conn.role == "pending":
+                    try:
+                        await room.send_to(conn)
+                    except Exception:
+                        return  # client vanished mid-hello; finally cleans up
+                    if knock_created:
                         await room.broadcast_to_gms()  # GM learns about the knock
 
                 elif mtype == "action":
@@ -153,6 +159,10 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                     except actions.ActionError as e:
                         await room.send_error(conn, str(e))
                         continue
+                    # a rejected knock tells the player it's over, then closes
+                    # their socket — the pending view now carries rejected: true
+                    if msg.get("action") == "reject_join":
+                        await room.notify_rejection(str(args.get("device_token") or ""))
                     await room.broadcast()
 
                 else:

@@ -1,6 +1,6 @@
 # 33 — table-companion: join/reject lifecycle + client type honesty
 
-**Status:** proposed — parked (table-companion not in use; backlog for when that changes).
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds); manual cross-browser cache check pending user verification.
 **Priority:** P3 — separate repo (`table-companion/`), own commits
 **Area:** `table-companion/server/actions.py` (reject_join), `server/hub.py`,
 `client/src/types.ts`, `client/src/net.ts`, `client/src/util.ts`
@@ -46,11 +46,11 @@
 
 ## Acceptance criteria
 
-- [ ] Rejected player sees the refusal and, after reload, does NOT
+- [x] Rejected player sees the refusal and, after reload, does NOT
       reappear in the knock panel (test).
-- [ ] Restart with a snapshotted knock from a gone client: no ghost entry
+- [x] Restart with a snapshotted knock from a gone client: no ghost entry
       after boot (test).
-- [ ] `types.ts` compiles the guard: accessing `view.timers` without the
+- [x] `types.ts` compiles the guard: accessing `view.timers` without the
       status check is a type error (or equivalent union narrowing).
 - [ ] GM-then-player in one browser paints no wrong-role flash (manual or
       DOM test).
@@ -63,3 +63,39 @@ players into a knockless pending limbo (no join request is created on
 the demotion transition), and a two-tab device loses its live knock
 when either tab closes — both in ticket 37, same fix surface
 (`refresh_seats` / the ws `finally`).
+
+## Implementation notes (2026-10-06)
+
+Landed across `server/{state,actions,hub,app}.py`, `client/src/{types,net,util}.ts`,
+`client/src/views/{PlayerView,GMView}.tsx`, and the test files:
+
+- Rejection record: `state["rejections"]` holds `{"device_token", "name"}`
+  (name kept so the GM console can offer re-seating). reject_join records it
+  (and refuses to reject an already-seated device); approve_join clears it;
+  session_reset wipes it; snapshot normalization restores it. A rejected
+  device's hello is silent — no knock, no GM broadcast.
+- Player notification: reject_join sends the rejected socket its rejected
+  pending view (`rejected: true`) under the send lock
+  (`Room.notify_rejection`), then closes it with **4003**; the client's
+  onclose maps 4003 to the auth-fail path — saved seat cleared, no reconnect
+  — while the "Turned away" screen stays painted (ticket's UX verbatim).
+- Boot prune: `Room.__init__` clears snapshotted join_requests — knocks are
+  live-session state, ghosts can never linger (AC2).
+- Client types: `StateView` is now a discriminated union
+  (`PendingView | ActiveView`) and `RoomConn` is generic over role, so the
+  GM's view is typed as the full view it always receives and the compiler
+  enforces the pending guard in PlayerView (AC3; build green).
+- Cache scoping (AC4): per-role keys `tc_view_gm` / `tc_view_player`, plus a
+  player-side room match before instant-paint. Known residual (documented):
+  the GM's cache can still briefly paint a stale room — full fix rides
+  tickets 40/41.
+- Deviations from the proposal: no TTL on rejections — a rejection stands
+  until the GM seats the person or the session resets; the GM console gained
+  a "was turned away … seat anyway…" panel because the server override path
+  would otherwise be unreachable (review round 1 flagged the promise/reality
+  gap). hello_player now only broadcasts to GMs when a NEW knock was created
+  (a rejected re-hello is silent — also fixes duplicate-knock broadcast noise).
+- Two review rounds; round 1 flagged the unreachable override, the
+  bound-token poisoning, and the unlock ordering — all fixed.
+- Gates: `python -m pytest` — 69 passed; `npm run build` green. AC4's
+  same-browser manual check left unticked pending user verification.

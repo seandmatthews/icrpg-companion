@@ -43,6 +43,17 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
 
   if (!view) return <div className="screen-center">connecting to the table…</div>;
   if (view.status === "pending") {
+    if (view.rejected) {
+      return (
+        <div className="screen-center pending-screen">
+          <div className="card pending-card">
+            <h2>Turned away</h2>
+            <p>The GM turned you away from room <strong>{view.room_code}</strong>.</p>
+            <p className="hint">You can close this page — the GM can seat you again if you should return.</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="screen-center pending-screen">
         <div className="card pending-card">
