@@ -47,6 +47,7 @@ export interface JoinRequest {
 }
 
 export interface LogEntry {
+  id?: string;
   ts: string;
   audience: "all" | "gm";
   actor: string;
@@ -54,6 +55,7 @@ export interface LogEntry {
 }
 
 export interface Milestone {
+  id?: string;
   pc_id: string;
   pc_name?: string;
   reason: string;

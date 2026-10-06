@@ -1,7 +1,7 @@
 # 50 — GM console input robustness: double-taps, lost deltas, per-keystroke title
 
-**Status:** proposed
-**Priority:** P3, containing one P1-shaped item (Problem 1)
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds); manual phone click-throughs pending user verification.
+**Priority:** P3, contained one P1-shaped item (Problem 1 — fixed)
 **Area:** `client/src/views/GMView.tsx`,
 `client/src/components/Timers.tsx` (GM forms), `server/actions.py`
 (timer_tick, set_title, milestone_delete)
@@ -107,4 +107,35 @@ Client-side (named manual click-throughs + build gate):
 - [ ] Manual: clear the title field and blur → title is empty on all
       clients; type a 30-char title → one commit (debounced), not
       thirty (observable via server log or snapshot mtime).
-- [ ] `npm run build` green.
+- [x] `npm run build` green.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/actions.py`, `server/state.py`, `client/src/types.ts`,
+`client/src/views/GMView.tsx`, `client/src/components/Timers.tsx`, tests:
+
+- The P1 Tick double-tap: TimerGM gains a `busy` prop — Tick is disabled
+  while in flight AND at `rounds_left === 0`. GM console-wide: a single
+  in-flight latch (`gsend`) wraps EVERY mutating control (timers, hearts,
+  reveal/delete, loot assign/recall/delete, approve/reject, alarm dismiss,
+  starter load, session reset, milestone, log note) — a send inside the echo
+  window is ignored; the latch clears on any state frame or error frame.
+  **Deviation:** the proposal's per-button disable landed as one latch
+  (simpler, uniform); rapid legit taps inside one echo window are dropped
+  rather than queued (deltas make that lossless at LAN latency).
+- Server: `set_title` accepts the empty string (snapshot normalize no longer
+  "repairs" an empty title back to the default); `set_targets` gained the
+  delta shape `{which, delta}` (clamped 2..30; absolute shape retained);
+  milestones carry stable `id`s and delete by id; log entries carry ids
+  (normalize mints ids for pre-50 entries on load).
+- Client: milestone prompt cancel/blank sends nothing; milestone list keyed
+  and deleted by id; log keyed by id; TN card sends deltas (fast taps can no
+  longer lose decrements); the four add-forms validate client-side (Add
+  disabled on invalid), clear fields only on the success echo, and the
+  title is a local draft committed on blur/Enter.
+- Two review rounds: round 1 caught a units regression (alarm duration sent
+  in minutes — would have rung 60× early), the missing milestone/TN client
+  edits, and the stuck-latch path on a dropped send — all fixed; round 2
+  approved clean.
+- Gates: `python -m pytest` — 90 passed ×2; `npm run build` green. Manual
+  click-through criteria left unticked pending user phone verification.

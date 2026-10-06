@@ -106,8 +106,8 @@ def test_snapshot_full_shape_round_trip(tmp_path):
     s["timers"].append(t)
     s["join_requests"].append({"device_token": "dev-1", "name": "Sam"})
     s["bindings"]["dev-1"] = {"pc_id": pc["pc_id"]}
-    s["log"].append({"ts": st.now_iso(), "audience": "gm", "actor": "GM", "text": "secret"})
-    s["milestones"].append({"pc_id": pc["pc_id"], "pc_name": "Vex", "reason": "cleared the vault", "ts": st.now_iso()})
+    s["log"].append({"id": "lg_1", "ts": st.now_iso(), "audience": "gm", "actor": "GM", "text": "secret"})
+    s["milestones"].append({"id": "ms_1", "pc_id": pc["pc_id"], "pc_name": "Vex", "reason": "cleared the vault", "ts": st.now_iso()})
     s["rejections"].append({"device_token": "dev-turned-away", "name": "Rando"})
     s["alarm"] = [{"timer_id": t["timer_id"], "label": t["label"]}]
     st.save_snapshot(s, str(tmp_path))
