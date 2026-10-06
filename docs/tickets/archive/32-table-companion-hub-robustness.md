@@ -1,6 +1,6 @@
 # 32 — table-companion: hub robustness (watcher, frames, partial mutations)
 
-**Status:** proposed — parked (table-companion not in use; backlog for when that changes).
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P2 — separate repo (`table-companion/`), own commits
 **Area:** `table-companion/server/hub.py`, `server/app.py`, `server/actions.py`,
 `server/content.py`
@@ -52,13 +52,13 @@
 
 ## Acceptance criteria
 
-- [ ] A deliberately stalled socket + overlapping broadcasts: watcher
+- [x] A deliberately stalled socket + overlapping broadcasts: watcher
       survives, alarms still resolve (test with a fake conn that raises).
-- [ ] Malformed frames return an error message to the client, socket
+- [x] Malformed frames return an error message to the client, socket
       stays open (test each wrong shape).
-- [ ] `pc_update {name, hearts_max: 99}` rejection leaves `name`
+- [x] `pc_update {name, hearts_max: 99}` rejection leaves `name`
       uncommitted and unbroadcast (state-diff test).
-- [ ] A pack missing `name` → readable ActionError, no partial apply.
+- [x] A pack missing `name` → readable ActionError, no partial apply.
 
 ## Related
 
@@ -68,3 +68,47 @@ class stays here; the *silent-corruption* wrong-typed args (null →
 ticket 36, and pack validation beyond the missing-key KeyError (tier,
 sanitize, BOM) to ticket 48. Land 36's central field helpers as part
 of this ticket's coercion proposal where they overlap.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/hub.py`, `server/app.py`, `server/actions.py`,
+`server/content.py`, `tests/test_actions.py`, `tests/test_ws_flow.py`:
+
+- Broadcast: a per-room `asyncio.Lock` serializes full-state frames
+  (ordering guarantee) and `_drop()` (guarded remove) makes dead-conn
+  reaping idempotent — two overlapping broadcasts can no longer raise
+  ValueError out of `conns.remove`. The ws finally-block uses the same
+  `_drop`, so there is exactly one removal path.
+- Watcher: body wrapped in `except Exception` with a warning log;
+  CancelledError still propagates (BaseException), so shutdown is intact.
+  A failed broadcast leaves the idempotent expiry in memory — delivered by
+  the next action's broadcast. Pinned by `test_watcher_survives_dead_conn`
+  (FailingWS fake conn + alarm ringing with NO client action driving it —
+  the first end-to-end watcher coverage in the suite).
+- Frames: non-dict JSON frames and non-dict `args` get an error frame and
+  stay connected; `_need_number`/`_finite_float` reject strings, bools,
+  NaN/Infinity, and huge ints (`10**400` → OverflowError → ActionError) in
+  hearts deltas and npc hearts; `set_targets`/`milestone_delete` intake via
+  `_opt_int`. Pinned by `test_malformed_frames_get_errors_not_disconnects`
+  and `test_wrong_typed_action_args_get_errors`.
+- Partial mutations: all four `*_update` handlers validate everything
+  (including ranges/tier/die) BEFORE the first mutation. Pinned by
+  `test_rejected_update_leaves_state_untouched`.
+- Content packs: `_validate_pack` validates the WHOLE pack (root object,
+  per-entry shapes, tiers, kinds, ranges) before anything is appended —
+  a malformed pack is a readable ActionError naming the entry, with zero
+  partial apply. Pinned by `test_malformed_pack_fails_without_partial_apply`.
+- Deliberately not done: the client-side `state.version` check (the ticket's
+  optional 4th item) — server-side ordering is now guaranteed by the lock;
+  the client check can ride a future client-lane ticket if wanted.
+- Known accepted P3 (noted for a follow-up): the send lock is held across
+  `await send_text`, so a client that stops reading (TCP window full) can
+  delay the room's broadcasts until its socket errors out — a per-send
+  `asyncio.wait_for` timeout or per-conn outbound queue is the fix if it
+  ever shows at a real table.
+- Review reuse: the arg-intake guards share ticket 36's helpers
+  (`_opt_str`/`_opt_int`/`_opt_bool`); the pack tier/sanitize validation
+  partially pre-empts ticket 48 (which keeps the BOM + field-bypass items).
+- Two review rounds; round 1 caught the OverflowError escape (huge JSON
+  ints) — fixed with `_finite_float` and probed live. Gates:
+  `python -m pytest` — 67 passed (twice for flake check).

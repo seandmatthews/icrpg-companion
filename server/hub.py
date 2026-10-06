@@ -6,6 +6,7 @@ broadcast. No deltas, no CRDT — state is a few KB.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from . import state as st
@@ -25,6 +26,10 @@ class Room:
         self.state = state
         self.data_dir = data_dir
         self.conns: list[Connection] = []
+        # serializes broadcasts: two overlapping sends can never interleave
+        # full-state frames across clients, and can never both try to reap
+        # the same dead connection (the suspected watcher-killer, ticket 32)
+        self._send_lock = asyncio.Lock()
 
     # -- mutation -----------------------------------------------------------
 
@@ -34,6 +39,12 @@ class Room:
         st.save_snapshot(self.state, self.data_dir)
 
     # -- fan-out --------------------------------------------------------------
+
+    def _drop(self, conn: Connection) -> None:
+        try:
+            self.conns.remove(conn)
+        except ValueError:
+            pass  # an overlapping broadcast already reaped it
 
     def refresh_seats(self) -> None:
         """Re-derive every non-GM seat from state before sending.
@@ -61,24 +72,26 @@ class Room:
 
     async def broadcast(self) -> None:
         self.refresh_seats()
-        for conn in list(self.conns):
-            try:
-                await self.send_to(conn)
-            except Exception:
-                # dead socket: drop it; the client's reconnect loop will bring
-                # it back and get a fresh full state on hello
-                self.conns.remove(conn)
+        async with self._send_lock:
+            for conn in list(self.conns):
+                try:
+                    await self.send_to(conn)
+                except Exception:
+                    # dead socket: drop it; the client's reconnect loop will bring
+                    # it back and get a fresh full state on hello
+                    self._drop(conn)
 
     async def broadcast_to_gms(self) -> None:
         """GM-only notification (join knocks and their removal are GM business;
         a pending player's own view doesn't change when they knock)."""
-        for conn in list(self.conns):
-            if conn.role != "gm":
-                continue
-            try:
-                await self.send_to(conn)
-            except Exception:
-                self.conns.remove(conn)
+        async with self._send_lock:
+            for conn in list(self.conns):
+                if conn.role != "gm":
+                    continue
+                try:
+                    await self.send_to(conn)
+                except Exception:
+                    self._drop(conn)
 
     async def send_error(self, conn: Connection, message: str, code: str = "rejected") -> None:
         await conn.ws.send_text(json.dumps({"type": "error", "message": message, "code": code}))

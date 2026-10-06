@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from server import actions, state as st
@@ -354,3 +356,75 @@ def test_non_string_names_rejected(seated_state):
     with pytest.raises(ActionError, match="must be a string"):
         act(seated_state, "set_title", {"title": 12})
     assert seated_state["title"] == "Untitled session"
+
+
+# -- hub robustness: validate-then-mutate, coercion, pack validation (ticket 32)
+
+
+def test_rejected_update_leaves_state_untouched(seated_state):
+    pc = seated_state["party"][0]
+    with pytest.raises(ActionError, match="hearts_max must be 1..20"):
+        act(seated_state, "pc_update", {"pc_id": pc["pc_id"], "name": "Newname", "hearts_max": 99})
+    assert pc["name"] == "Vex" and pc["hearts_max"] == 3
+
+    npc = seated_state["npcs"][0]
+    with pytest.raises(ActionError, match="bad effort_die"):
+        act(seated_state, "npc_update", {"npc_id": npc["npc_id"], "name": "Renamed", "effort_die": "d20"})
+    assert npc["name"] == "Sergeant Orla"
+
+    item = seated_state["loot"][0]
+    with pytest.raises(ActionError, match="bad tier"):
+        act(seated_state, "loot_update", {"item_id": item["item_id"], "name": "Renamed", "tier": "legendary"})
+    assert item["name"] == "Ford signet ring"
+
+    act(seated_state, "timer_add", {"kind": "alarm", "label": "t", "duration_s": 60})
+    t = seated_state["timers"][0]
+    with pytest.raises(ActionError, match="duration_s must be 1..86400"):
+        act(seated_state, "timer_update", {"timer_id": t["timer_id"], "label": "Renamed", "duration_s": 0})
+    assert t["label"] == "t" and t["duration_s"] == 60
+
+
+def test_non_coercible_numbers_rejected(seated_state):
+    pc = seated_state["party"][0]
+    with pytest.raises(ActionError, match="must be a number"):
+        act(seated_state, "pc_hearts", {"pc_id": pc["pc_id"], "delta": "abc"})
+    with pytest.raises(ActionError, match="must be a number"):
+        act(seated_state, "pc_hearts", {"pc_id": pc["pc_id"], "delta": True})
+    with pytest.raises(ActionError, match="finite"):
+        act(seated_state, "pc_hearts", {"pc_id": pc["pc_id"], "delta": float("nan")})
+    assert pc["hearts"] == pc["hearts_max"]  # untouched by every rejection
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(seated_state, "set_targets", {"default": "12a", "scene": 3})
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(seated_state, "milestone_delete", {"index": "x"})
+
+
+def test_malformed_pack_fails_without_partial_apply(seated_state, monkeypatch, tmp_path):
+    from server import content
+
+    monkeypatch.setattr(content, "PACKS_DIR", str(tmp_path))
+    n_loot, n_timers = len(seated_state["loot"]), len(seated_state["timers"])
+
+    (tmp_path / "bad.json").write_text(
+        json.dumps({"loot": [{"name": "Good ring", "tier": "common"}],
+                    "timers": [{"label": "Bad timer", "kind": "alarm"}]}),  # missing duration_s
+        encoding="utf-8")
+    with pytest.raises(ActionError, match="duration_s"):
+        act(seated_state, "starter_load", {"pack": "bad"})
+    assert len(seated_state["loot"]) == n_loot and len(seated_state["timers"]) == n_timers
+
+    (tmp_path / "nokey.json").write_text(json.dumps({"loot": [{"tier": "common"}]}), encoding="utf-8")
+    with pytest.raises(ActionError, match="needs a name"):
+        act(seated_state, "starter_load", {"pack": "nokey"})
+
+    (tmp_path / "tier.json").write_text(json.dumps({"loot": [{"name": "X", "tier": "legendary"}]}), encoding="utf-8")
+    with pytest.raises(ActionError, match="tier"):
+        act(seated_state, "starter_load", {"pack": "tier"})
+
+    (tmp_path / "list.json").write_text(json.dumps([1]), encoding="utf-8")
+    with pytest.raises(ActionError, match="JSON object"):
+        act(seated_state, "starter_load", {"pack": "list"})
+
+    (tmp_path / "str.json").write_text(json.dumps({"loot": [{"name": "X", "bonus": 5}]}), encoding="utf-8")
+    with pytest.raises(ActionError, match="must be strings"):
+        act(seated_state, "starter_load", {"pack": "str"})

@@ -302,3 +302,69 @@ def test_snapshot_survives_restart(tmp_path):
 
     with TestServer(data_dir, fresh=True) as srv3:
         assert srv3.app.state_model["party"] == []
+
+
+# -- hub robustness over the wire (ticket 32) ---------------------------------
+
+
+def test_malformed_frames_get_errors_not_disconnects(ns):
+    with gm_session(ns) as gm:
+        for frame in ['"x"', "[1]", "null", "123", '{"type":123}', '{"type":"action","args":"nope"}']:
+            gm.ws.send(frame)
+            msg = gm.recv()
+            assert msg["type"] == "error", frame
+        # the socket survived every malformed frame and still works
+        state = do(gm, "log_note", text="still here")
+        assert state["log"][-1]["text"] == "still here"
+
+
+def test_wrong_typed_action_args_get_errors(ns):
+    with gm_session(ns) as gm:
+        for action, args in [
+            ("set_targets", {"default": "12a", "scene": 3}),
+            ("pc_hearts", {"pc_id": "pc_x", "delta": "abc"}),
+            ("pc_hearts", {"pc_id": "pc_x", "delta": True}),
+            ("pc_hearts", {"pc_id": "pc_x", "delta": 10**400}),  # OverflowError class
+            ("milestone_delete", {"index": "x"}),
+            ("pc_update", {"pc_id": "pc_x", "hearts_max": True}),
+        ]:
+            gm.send(type="action", action=action, args=args)
+            msg = gm.recv()
+            assert msg["type"] == "error", (action, args)
+        do(gm, "log_note", text="alive")  # the connection survived them all
+
+
+def test_watcher_survives_dead_conn(ns):
+    # the ticket 32 kill scenario: a broadcast to a dead socket used to be
+    # able to kill the timer watcher, silently stopping alarm resolution
+    from server.hub import Connection
+
+    class FailingWS:
+        async def send_text(self, text):
+            raise RuntimeError("simulated dead socket")
+
+    room = ns.app.state_room
+    with gm_session(ns) as gm:
+        state = do(gm, "timer_add", kind="alarm", label="boom", duration_s=2)
+        do(gm, "timer_start", timer_id=state["timers"][0]["timer_id"])
+        dead = Connection()
+        dead.ws = FailingWS()
+        dead.role = "gm"
+        room.conns.append(dead)  # dies right before the watcher's next tick
+
+        # the alarm must still ring on the REAL client — with no action sent,
+        # the only broadcaster is the watcher itself
+        deadline = time.time() + 10
+        alarm_seen = False
+        while time.time() < deadline and not alarm_seen:
+            msg = gm.recv(timeout=10)
+            if msg["type"] == "state" and msg["state"].get("alarm"):
+                alarm_seen = True
+        assert alarm_seen, "watcher died before ringing the alarm"
+        # the reap happens in the same broadcast that delivered the alarm, but
+        # asynchronously relative to this thread — poll, don't race
+        deadline = time.time() + 5
+        while dead in room.conns and time.time() < deadline:
+            time.sleep(0.05)
+        assert dead not in room.conns, "dead conn was never reaped"
+        do(gm, "log_note", text="watcher alive")  # server fully functional
