@@ -10,13 +10,45 @@ const GM_KEY = "tc_gmkey";
 const SEAT_KEY = "tc_seat"; // {room, name}
 const VIEW_KEY = "tc_view";
 
-export function getDevice(): string {
-  let d = localStorage.getItem(DEVICE_KEY);
-  if (!d) {
-    d = crypto.randomUUID();
-    localStorage.setItem(DEVICE_KEY, d);
+// crypto.randomUUID exists only in secure contexts (https / localhost); the
+// table serves plain http://<lan-ip>, so phones must take the getRandomValues
+// path. Minting is a pure bytes→token function so it stays testable.
+export function mintDeviceToken(getBytes: (n: number) => Uint8Array): string {
+  const b = getBytes(16);
+  b[6] = (b[6] & 0x0f) | 0x40; // uuid v4 bits
+  b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+function randomBytes(n: number): Uint8Array {
+  const b = new Uint8Array(n);
+  const c = globalThis.crypto;
+  if (c && typeof c.getRandomValues === "function") {
+    c.getRandomValues(b);
+  } else {
+    // last-ditch: Math.random quality is irrelevant here — the token only
+    // needs uniqueness, and this path must never throw (ticket 34)
+    for (let i = 0; i < n; i++) b[i] = Math.floor(Math.random() * 256);
   }
-  return d;
+  return b;
+}
+
+export function getDevice(): string {
+  try {
+    let d = localStorage.getItem(DEVICE_KEY);
+    if (!d) {
+      const c = crypto as Omit<Crypto, "randomUUID"> & { randomUUID?: () => string };
+      d = c.randomUUID ? c.randomUUID() : mintDeviceToken(randomBytes);
+      localStorage.setItem(DEVICE_KEY, d);
+    }
+    return d;
+  } catch {
+    // insecure context without getRandomValues, storage disabled, … — a
+    // session-only token beats throwing inside ws.onopen (ticket 34)
+    console.warn("tc: device identity unavailable, using a session-only token");
+    return mintDeviceToken(randomBytes);
+  }
 }
 
 export function getGmKey(): string | null {
