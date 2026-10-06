@@ -510,3 +510,115 @@ def test_reject_after_reknock_still_sticks(ns):
             assert again["state"].get("rejected") is True
             gm_view = do(gm, "log_note", text="probe")
             assert gm_view["join_requests"] == []
+
+
+# -- WS surface hardening (ticket 38) -----------------------------------------
+
+
+def test_silent_socket_receives_no_state(ns):
+    """A socket that never says hello gets NO broadcasts — no room title, no
+    character names, nothing, until it identifies itself (ticket 38)."""
+    import time
+
+    silent = WS(ns.ws_base + "/ws")
+    try:
+        with gm_session(ns) as gm:
+            do(gm, "log_note", text="secret room business")
+            with pytest.raises(TimeoutError):
+                silent.recv(timeout=2)  # nothing, ever
+    finally:
+        silent.close()
+
+
+def test_unhelloed_socket_is_closed(ns, monkeypatch):
+    import time
+
+    from server import app as app_module
+
+    monkeypatch.setattr(app_module, "HELLO_DEADLINE", 1.5)
+    silent = WS(ns.ws_base + "/ws")
+    try:
+        deadline = time.time() + 10
+        closed_code = None
+        last = None
+        while time.time() < deadline and closed_code is None:
+            try:
+                silent.recv(timeout=5)  # longer than the worst-case sweep tick
+            except TimeoutError:
+                continue  # sweep hasn't landed yet — keep waiting
+            except Exception as e:
+                last = f"{type(e).__name__}: {getattr(getattr(e, 'rcvd', None), 'code', e)}"
+                rcvd = getattr(e, "rcvd", None)
+                if rcvd is not None:
+                    closed_code = rcvd.code
+                break
+        assert closed_code == 4000, f"never observed a 4000 close; last: {last}"
+    finally:
+        silent.close()
+
+
+def test_cross_site_origin_handshake_rejected(ns):
+    # a cross-site Origin must fail the handshake outright (drive-by webpage)
+    from websockets.exceptions import InvalidStatus
+    from websockets.sync.client import connect as ws_connect
+
+    with pytest.raises(InvalidStatus):
+        ws_connect(ns.ws_base + "/ws", origin="http://evil.example")
+
+
+def test_tokenless_hello_rejected(ns):
+    # chosen contract (ticket 38): no more server-minted ghost identities —
+    # a tokenless hello is rejected with a readable error, not a new identity
+    from websockets.sync.client import connect as ws_connect
+
+    ws = ws_connect(ns.ws_base + "/ws")
+    try:
+        ws.send(json.dumps({"type": "hello_player", "room": ns.state["room_code"], "name": "NoToken"}))
+        msg = json.loads(ws.recv(timeout=5))
+        assert msg["type"] == "error" and "device token" in msg["message"]
+    finally:
+        ws.close()
+
+
+def test_join_request_cap(ns, monkeypatch):
+    # a knock flood must not grow the join list (and every future snapshot
+    # write with it) — capped at KNOCK_CAP, oldest evicted
+    from server import hub as hub_module
+    from server.hub import Connection
+
+    monkeypatch.setattr(hub_module, "KNOCK_CAP", 5)
+    room = ns.app.state_room
+    for i in range(8):
+        room.handle_hello_player(Connection(), f"flood-{i}", f"Flood{i}")
+    assert len(ns.state["join_requests"]) == 5
+    # the OLDEST were evicted; the most recent knock still stands
+    assert any(r["device_token"] == "flood-7" for r in ns.state["join_requests"])
+    assert not any(r["device_token"] == "flood-0" for r in ns.state["join_requests"])
+
+
+def test_client_drop_during_send_is_quiet(ns, caplog):
+    """The guard the ticket names: a send to a socket that just died must be
+    a quiet reap, not an unhandled per-connection error — and the room keeps
+    broadcasting to everyone else."""
+    import logging
+
+    from server.hub import Connection
+
+    class FailingWS:
+        async def send_text(self, text):
+            raise RuntimeError("simulated dead socket")
+
+    room = ns.app.state_room
+    dead = Connection()
+    dead.ws = FailingWS()
+    dead.role = "player"
+    dead.device_token = "dead-token"
+    room.conns.append(dead)
+
+    with caplog.at_level(logging.ERROR):
+        with gm_session(ns) as gm:
+            do(gm, "log_note", text="one")  # broadcast hits the dead conn
+            assert dead not in room.conns   # reaped by the guarded fan-out
+            do(gm, "log_note", text="two")  # the room is still fully alive
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert not errors, errors

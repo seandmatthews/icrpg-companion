@@ -9,6 +9,7 @@ import os
 import secrets
 import socket
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,6 +19,8 @@ from . import actions, state as st
 from .hub import Connection, Room
 
 _log = logging.getLogger("table-companion")
+
+HELLO_DEADLINE = 10.0  # a socket that never says hello is closed (ticket 38)
 
 CLIENT_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "client", "dist")
 
@@ -86,87 +89,109 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
+        # browsers always send Origin on a WebSocket handshake; a cross-site
+        # origin is a drive-by webpage, not this client — refuse the handshake
+        origin = ws.headers.get("origin")
+        if origin and (
+            origin == "null" or urlparse(origin).netloc not in ("", ws.headers.get("host"))
+        ):
+            await ws.close()
+            return
         await ws.accept()
         conn = Connection()
         conn.ws = ws
+        conn.opened = st.now()
         room.conns.append(conn)
         try:
             while True:
                 try:
-                    msg = json.loads(await ws.receive_text())
-                except json.JSONDecodeError:
-                    await room.send_error(conn, "garbled message")
-                    continue
-                if not isinstance(msg, dict):
-                    # a non-object frame must be an error, never a crash
-                    # ("x" / [1] / null used to abort the socket, ticket 32)
-                    await room.send_error(conn, "garbled message")
-                    continue
-                mtype = msg.get("type")
-
-                if mtype == "ping":
-                    await ws.send_text(json.dumps({"type": "pong", "server_time": st.now()}))
-
-                elif mtype == "hello_gm":
-                    if msg.get("gm_token") != room.state["gm_token"]:
-                        await room.send_error(conn, "wrong GM key", code="auth")
-                        await ws.close(code=4001)
-                        return
-                    conn.role = "gm"
-                    conn.device_token = str(msg.get("device_token") or "")
                     try:
-                        await room.send_to(conn)
-                    except Exception:
-                        return  # client vanished mid-hello; finally cleans up
-
-                elif mtype == "hello_player":
-                    if msg.get("room") != room.state["room_code"]:
-                        await room.send_error(conn, "wrong room code", code="auth")
-                        await ws.close(code=4002)
-                        return
-                    knock_created = room.handle_hello_player(
-                        conn, str(msg.get("device_token") or st.id4("dev")), str(msg.get("name") or "Player")
-                    )
-                    try:
-                        await room.send_to(conn)
-                    except Exception:
-                        return  # client vanished mid-hello; finally cleans up
-                    if knock_created:
-                        await room.broadcast_to_gms()  # GM learns about the knock
-
-                elif mtype == "action":
-                    if conn.role not in ("gm", "player"):
-                        await room.send_error(conn, "say hello first")
+                        msg = json.loads(await ws.receive_text())
+                    except json.JSONDecodeError:
+                        await room.send_error(conn, "garbled message")
                         continue
-                    args = msg.get("args")
-                    if args is None:
-                        args = {}
-                    if not isinstance(args, dict):
-                        await room.send_error(conn, "args must be an object")
+                    if not isinstance(msg, dict):
+                        # a non-object frame must be an error, never a crash
+                        # ("x" / [1] / null used to abort the socket, ticket 32)
+                        await room.send_error(conn, "garbled message")
                         continue
-                    actor = "GM" if conn.role == "gm" else (conn.name or "Player")
-                    try:
-                        actions.apply_action(
-                            room.state,
-                            conn.role,
-                            actor,
-                            str(msg.get("action", "")),
-                            args,
-                            pc_id=conn.pc_id,
+                    mtype = msg.get("type")
+
+                    if mtype == "ping":
+                        await ws.send_text(json.dumps({"type": "pong", "server_time": st.now()}))
+
+                    elif mtype == "hello_gm":
+                        if not secrets.compare_digest(
+                            str(msg.get("gm_token") or "").encode("utf-8"),
+                            room.state["gm_token"].encode("utf-8"),
+                        ):
+                            await room.send_error(conn, "wrong GM key", code="auth")
+                            await ws.close(code=4001)
+                            return
+                        conn.role = "gm"
+                        conn.device_token = str(msg.get("device_token") or "")
+                        await room.send_to(conn)
+
+                    elif mtype == "hello_player":
+                        if msg.get("room") != room.state["room_code"]:
+                            await room.send_error(conn, "wrong room code", code="auth")
+                            await ws.close(code=4002)
+                            return
+                        device_token = str(msg.get("device_token") or "")
+                        if not (1 <= len(device_token) <= 64):
+                            # no more server-minted ghost identities: a client
+                            # without a token is broken, not anonymous (ticket 38)
+                            await room.send_error(conn, "a valid device token is required")
+                            await ws.close(code=4002)
+                            return
+                        knock_created = room.handle_hello_player(
+                            conn, device_token, str(msg.get("name") or "Player")
                         )
-                        st.check_timers(room.state, st.now())
-                        room.commit()
-                    except actions.ActionError as e:
-                        await room.send_error(conn, str(e))
-                        continue
-                    # a rejected knock tells the player it's over, then closes
-                    # their socket — the pending view now carries rejected: true
-                    if msg.get("action") == "reject_join":
-                        await room.notify_rejection(str(args.get("device_token") or ""))
-                    await room.broadcast()
+                        await room.send_to(conn)
+                        if knock_created:
+                            await room.broadcast_to_gms()  # GM learns about the knock
 
-                else:
-                    await room.send_error(conn, f"unknown message type '{mtype}'")
+                    elif mtype == "action":
+                        if conn.role not in ("gm", "player"):
+                            await room.send_error(conn, "say hello first")
+                            continue
+                        args = msg.get("args")
+                        if args is None:
+                            args = {}
+                        if not isinstance(args, dict):
+                            await room.send_error(conn, "args must be an object")
+                            continue
+                        actor = "GM" if conn.role == "gm" else (conn.name or "Player")
+                        try:
+                            actions.apply_action(
+                                room.state,
+                                conn.role,
+                                actor,
+                                str(msg.get("action", "")),
+                                args,
+                                pc_id=conn.pc_id,
+                            )
+                            st.check_timers(room.state, st.now())
+                            room.commit()
+                        except actions.ActionError as e:
+                            await room.send_error(conn, str(e))
+                            continue
+                        # a rejected knock tells the player it's over, then closes
+                        # their socket — the pending view now carries rejected: true
+                        if msg.get("action") == "reject_join":
+                            await room.notify_rejection(str(args.get("device_token") or ""))
+                        await room.broadcast()
+
+                    else:
+                        await room.send_error(conn, f"unknown message type '{mtype}'")
+                except WebSocketDisconnect:
+                    raise
+                except Exception:
+                    # a failing send (or close) on a socket that just died must
+                    # not escape as an unhandled per-connection error (ticket 38);
+                    # the finally below still runs, so cleanup is unaffected
+                    _log.warning("ws handler error; closing connection", exc_info=True)
+                    return
 
         except WebSocketDisconnect:
             pass
@@ -191,7 +216,8 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
         """Server-side alarm authority: expiry is resolved here, once.
         A failed tick is logged, never fatal: a failed broadcast still leaves
         the (idempotent) resolution in memory, delivered by the next action's
-        broadcast — but the watcher itself must not die (ticket 32)."""
+        broadcast — but the watcher itself must not die (ticket 32). Also
+        sweeps sockets that never said hello (ticket 38)."""
         while True:
             await asyncio.sleep(1)
             try:
@@ -200,6 +226,14 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                     await room.broadcast()
             except Exception:
                 _log.warning("timer watcher tick failed; will retry", exc_info=True)
+            # hello-deadline sweep runs AFTER timer authority: a failing close
+            # must never delay an alarm (ticket 38)
+            try:
+                for conn in list(room.conns):
+                    if conn.role is None and st.now() - conn.opened > HELLO_DEADLINE:
+                        await conn.ws.close(code=4000)
+            except Exception:
+                _log.warning("hello-deadline sweep failed", exc_info=True)
 
     index_html = os.path.join(CLIENT_DIST, "index.html")
 

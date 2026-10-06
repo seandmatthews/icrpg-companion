@@ -376,6 +376,13 @@ layout) ships both from a single artifact when the time comes.
   the only thing standing between faction secrets and the players' phones —
   test the exporter against a campaign with live secrets before first real
   use.
+- **Security stance: the trusted LAN is the outer gate** (ruled 2026-10-06).
+  The room code — including the unauthenticated `/api/bootstrap` copy of it —
+  is a convenience, not a secret; the GM's knock-approval is the real
+  boundary. Anyone on the network can knock with any name regardless, so
+  hiding the code adds friction without adding a boundary. If the venue
+  threat model ever changes (semi-public Wi-Fi), the escape hatch is gating
+  the bootstrap room code behind the GM key.
 
 ## 11. ICRPG mechanics mapping
 

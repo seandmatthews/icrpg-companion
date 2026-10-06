@@ -11,6 +11,8 @@ import json
 
 from . import state as st
 
+KNOCK_CAP = 50  # a hostile knock flood must not grow every snapshot write
+
 
 class Connection:
     def __init__(self) -> None:
@@ -19,6 +21,7 @@ class Connection:
         self.pc_id: str | None = None
         self.device_token: str | None = None
         self.name: str = ""
+        self.opened: float = 0.0  # st.now() at accept; hello-deadline sweep
 
 
 class Room:
@@ -41,6 +44,11 @@ class Room:
         """Version bump + snapshot after a successful mutation."""
         self.state["version"] = self.state.get("version", 0) + 1
         st.save_snapshot(self.state, self.data_dir)
+
+    def _record_knock(self, device_token: str, name: str) -> None:
+        """Append a knock under the flood cap (oldest evicted). Caller commits."""
+        self.state["join_requests"].append({"device_token": device_token, "name": name})
+        del self.state["join_requests"][:-KNOCK_CAP]
 
     # -- fan-out --------------------------------------------------------------
 
@@ -72,9 +80,7 @@ class Room:
                     and not st.is_rejected(self.state, conn.device_token)
                     and not any(r["device_token"] == conn.device_token for r in self.state["join_requests"])
                 ):
-                    self.state["join_requests"].append(
-                        {"device_token": conn.device_token, "name": conn.name or "Player"}
-                    )
+                    self._record_knock(conn.device_token, conn.name or "Player")
                     knocked = True
                 conn.role, conn.pc_id = "pending", None
         if knocked:
@@ -93,6 +99,8 @@ class Room:
         self.refresh_seats()
         async with self._send_lock:
             for conn in list(self.conns):
+                if conn.role is None:
+                    continue  # never-helloed sockets get nothing (ticket 38)
                 try:
                     await self.send_to(conn)
                 except Exception:
@@ -148,7 +156,7 @@ class Room:
         if st.is_rejected(self.state, device_token):
             return False
         if not any(r["device_token"] == device_token for r in self.state["join_requests"]):
-            self.state["join_requests"].append({"device_token": device_token, "name": conn.name})
+            self._record_knock(device_token, conn.name)
             self.commit()
             return True
         return False
