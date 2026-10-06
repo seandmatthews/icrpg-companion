@@ -59,6 +59,14 @@ content/alfheim.json original-flavor starter kit (loot + timers + TN defaults)
 scripts/make_icons.py pure-stdlib PNG icon generator (run once, output committed)
 ```
 
+## Docs
+
+`DESIGN.md` is the design record. Process lives in `docs/`:
+`docs/WORKFLOW.md` (implement → verify → review → merge, severity
+definitions) and `docs/tickets/CONVENTIONS.md` (ticket format, template,
+archive lifecycle — open tickets: 32–52). `AGENTS.md` carries the
+repo-wide agent rules.
+
 ## Develop
 
 Client (from `client/`): `npm run build`. Two machine quirks are already
