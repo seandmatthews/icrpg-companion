@@ -54,12 +54,20 @@ export function getDevice(): string {
 }
 
 export function getGmKey(): string | null {
-  return localStorage.getItem(GM_KEY);
+  try {
+    return localStorage.getItem(GM_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function setGmKey(k: string | null) {
-  if (k) localStorage.setItem(GM_KEY, k);
-  else localStorage.removeItem(GM_KEY);
+  try {
+    if (k) localStorage.setItem(GM_KEY, k);
+    else localStorage.removeItem(GM_KEY);
+  } catch {
+    /* storage unavailable — the session just won't persist */
+  }
 }
 
 export interface Seat {
@@ -77,8 +85,12 @@ export function getSeat(): Seat | null {
 }
 
 export function setSeat(seat: Seat | null) {
-  if (seat) localStorage.setItem(SEAT_KEY, JSON.stringify(seat));
-  else localStorage.removeItem(SEAT_KEY);
+  try {
+    if (seat) localStorage.setItem(SEAT_KEY, JSON.stringify(seat));
+    else localStorage.removeItem(SEAT_KEY);
+  } catch {
+    /* storage unavailable — the session just won't persist */
+  }
 }
 
 export function cacheView(v: unknown, role: "gm" | "player") {
@@ -89,18 +101,62 @@ export function cacheView(v: unknown, role: "gm" | "player") {
   }
 }
 
+// the cache is painted before the server answers, so its shape is validated:
+// an old-build or hand-mangled blob must boot to a form, never throw on first
+// paint (ticket 41)
+function validCachedView(v: unknown, role: "gm" | "player"): boolean {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  if (
+    r.schema !== "table-companion/v0" ||
+    typeof r.version !== "number" ||
+    typeof r.room_code !== "string" ||
+    typeof r.title !== "string"
+  ) {
+    return false;
+  }
+  // pending-shaped blobs are legit for players and poison for the GM console,
+  // and anything active-shaped must carry the fields the paint path indexes —
+  // including the alarm queue (an old-build single-dict alarm would loop
+  // "Tap to reload" forever). Otherwise: boot to a form, never throw.
+  if (r.status === "pending") return role === "player" && Array.isArray(r.party);
+  return (
+    Array.isArray(r.timers) &&
+    !!r.targets &&
+    typeof r.targets === "object" &&
+    typeof (r.targets as Record<string, unknown>).default === "number" &&
+    typeof (r.targets as Record<string, unknown>).scene === "number" &&
+    (r.alarm === null || Array.isArray(r.alarm))
+  );
+}
+
 export function cachedView(role: "gm" | "player"): unknown | null {
   try {
     const raw = localStorage.getItem(VIEW_KEYS[role]);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!validCachedView(parsed, role)) {
+      localStorage.removeItem(VIEW_KEYS[role]);
+      return null;
+    }
+    return parsed;
   } catch {
+    try {
+      localStorage.removeItem(VIEW_KEYS[role]);
+    } catch {
+      /* storage itself is gone — nothing to clean */
+    }
     return null;
   }
 }
 
 export function clearCachedView() {
-  localStorage.removeItem(VIEW_KEYS.gm);
-  localStorage.removeItem(VIEW_KEYS.player);
+  try {
+    localStorage.removeItem(VIEW_KEYS.gm);
+    localStorage.removeItem(VIEW_KEYS.player);
+  } catch {
+    /* nothing to clean */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,9 +181,16 @@ export function useWakeLock(active: boolean) {
     let cancelled = false;
     const acquire = async () => {
       try {
-        const nav = navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<typeof lock> } };
+        const nav = navigator as Navigator & {
+          wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+        };
         if (nav.wakeLock && document.visibilityState === "visible") {
-          lock = await nav.wakeLock.request("screen");
+          const l = await nav.wakeLock.request("screen");
+          if (cancelled) {
+            l.release().catch(() => {});
+            return;
+          }
+          lock = l;
         }
       } catch {
         /* unsupported or denied — fine */
