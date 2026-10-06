@@ -1,6 +1,6 @@
 # 41 — client shell error-proofing: boundary, cache validation, storage, logout
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (three review rounds); manual click-throughs pending user verification.
 **Priority:** P2
 **Area:** `client/src/main.tsx`, `client/src/net.ts` (cache), 
 `client/src/util.ts`, `client/src/App.tsx`, `README.md` (PWA wording)
@@ -83,3 +83,35 @@ a bare white screen on a phone, mid-session:
       object → reject, valid → pass).
 - [ ] README's Add-to-Home-Screen line states the actual behavior over
       LAN HTTP; `npm run build` green.
+
+## Implementation notes (2026-10-06)
+
+Landed in `client/src/ErrorBoundary.tsx` (new), `main.tsx`, `util.ts`,
+`views/GMView.tsx`, `README.md`:
+
+- Floor under the shell: top-level ErrorBoundary ("Something broke — Tap to
+  reload") plus window error/unhandledrejection handlers imperatively showing
+  the same card (dev double-card suppressed by a module flag; rejection
+  reasons logged).
+- Cache validation before the instant-paint cast: `validCachedView(v, role)`
+  checks schema/version/room_code/title, is ROLE-AWARE (pending shapes only
+  for players), and for active shapes requires timers to be an array, targets
+  to be {default,scene} numbers, and alarm to be null-or-array — review
+  rounds 2–3 caught that a pre-42 dict-alarm cache (the realistic old-build
+  blob) and a pending-under-GM blob both crashed with a reload loop and no
+  exit. Clear-on-mismatch boots to a form instead.
+- All localStorage helpers are best-effort (private mode / quota degrades to
+  session-only, never throws inside a React handler); the wakelock releases a
+  late-resolved lock.
+- "Forget this console" on the GM Session card (confirm → clear key + caches
+  → reload → Landing).
+- README's Add-to-Home-Screen line now states the reality: bookmark over LAN
+  HTTP, no install prompt, no offline mode; "PWA" means manifest + icons.
+- Deviations (documented): the GM-key-wins precedence doc item is mooted by
+  the Forget button (any GM console can now reach Landing); module-evaluation
+  throws still white-screen (handlers install after imports — none exist);
+  optional collections (party/log) in a hand-mangled active cache can still
+  reach the boundary rather than boot-to-form — unreachable from any shipped
+  build, deliberate-edit only (noted in review, accepted).
+- Gates: `python -m pytest` — 90 passed; `npm run build` green. Manual
+  click-through criteria left unticked pending user verification.

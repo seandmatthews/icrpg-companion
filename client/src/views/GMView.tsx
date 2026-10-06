@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
 import type { ActiveView, Bootstrap } from "../types";
 import type { RoomConn } from "../net";
-import { useNow, useWakeLock } from "../util";
+import { clearCachedView, setGmKey, useNow, useWakeLock } from "../util";
 import { HeartStepper } from "../components/Hearts";
 import { LootCardBody } from "../components/LootCard";
 import { TNCard } from "../components/TNCard";
@@ -22,7 +22,11 @@ function Card({ title, children, className }: { title?: string; children: React.
 function QRModal({ url, roomCode, suspect, onClose }: { url: string; roomCode: string; suspect: boolean; onClose: () => void }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
-    QRCode.toDataURL(url, { width: 512, margin: 2, color: { dark: "#16161a", light: "#f5f0e6" } }).then(setSrc);
+    QRCode.toDataURL(url, { width: 512, margin: 2, color: { dark: "#16161a", light: "#f5f0e6" } })
+      .then(setSrc)
+      .catch(() => {
+        /* a failed QR leaves "generating…" — the URL line below still works */
+      });
   }, [url]);
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -520,6 +524,18 @@ export function GMView({
               }}
             >
               New session
+            </button>
+            <button
+              className="btn"
+              onClick={() => {
+                if (confirm("Forget this console? You'll need the GM key to open it again.")) {
+                  setGmKey(null);
+                  clearCachedView();
+                  location.reload();
+                }
+              }}
+            >
+              Forget this console
             </button>
           </Card>
         </div>

@@ -38,8 +38,10 @@ Keep this window open while you play. **Ctrl+C stops the server.**
 - The QR encodes the server's LAN IP, detected at boot. If phones can't reach
   it (guest-WiFi client isolation is the usual suspect), **Windows Mobile
   Hotspot** makes the laptop its own network and always works.
-- "Add to Home Screen" works over LAN HTTP (no service worker offline mode —
-  fine, the server is on the table anyway).
+- "Add to Home Screen" places a plain bookmark over LAN HTTP: no install
+  prompt and no offline mode (service workers need a secure context) — fine,
+  the server is on the table anyway. Calling it a PWA means manifest + icons,
+  nothing more.
 - Player data lives on the server (snapshot in `data/`); the phone mirrors it
   and keeps a device token, so a reload restores the seat and a lost phone is
   fixed by the GM re-seating the same character on the new device.
