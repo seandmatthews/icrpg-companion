@@ -201,9 +201,10 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
         </button>
       </header>
 
-      {view.alarm && (
+      {(view.alarm ?? []).length > 0 && (
         <div className="alarm-banner">
-          ⏰ {view.alarm.label} — TIME!
+          ⏰ {view.alarm![0].label} — TIME!
+          {(view.alarm ?? []).length > 1 && <span> (+{(view.alarm ?? []).length - 1} more)</span>}
           <button className="btn" onClick={() => send("alarm_dismiss")}>
             Dismiss
           </button>

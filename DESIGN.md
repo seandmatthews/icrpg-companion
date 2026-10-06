@@ -372,6 +372,12 @@ layout) ships both from a single artifact when the time comes.
 - **QR must encode the LAN IP**, not `localhost`; hostname/mDNS discovery is
   a nice-to-have, hardcoding-the-IP-at-boot is fine for v0.
 - **Never trust client clocks** for timer authority (server `started_at`).
+- **Wall-clock server timers** (ruled 2026-10-06): deadlines are epoch-based
+  because they must survive snapshot restore (monotonic clocks can't). A
+  backward clock step mid-session makes running alarms ring *late*, a
+  forward step rings them *early* — accepted; late is the benign direction.
+  Detect-and-compensate (`last_seen_now` + shifting `started_at`) is the
+  named follow-up if it ever bites at a real table.
 - **Player-device privacy:** the manifest's default-deny visibility flag is
   the only thing standing between faction secrets and the players' phones —
   test the exporter against a campaign with live secrets before first real

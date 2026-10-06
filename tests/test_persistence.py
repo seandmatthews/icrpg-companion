@@ -109,6 +109,7 @@ def test_snapshot_full_shape_round_trip(tmp_path):
     s["log"].append({"ts": st.now_iso(), "audience": "gm", "actor": "GM", "text": "secret"})
     s["milestones"].append({"pc_id": pc["pc_id"], "pc_name": "Vex", "reason": "cleared the vault", "ts": st.now_iso()})
     s["rejections"].append({"device_token": "dev-turned-away", "name": "Rando"})
+    s["alarm"] = [{"timer_id": t["timer_id"], "label": t["label"]}]
     st.save_snapshot(s, str(tmp_path))
     loaded, reason = st.load_snapshot(str(tmp_path))
     assert reason is None

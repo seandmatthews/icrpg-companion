@@ -150,6 +150,13 @@ def _shift_hearts(current: float, maximum: float, delta: float) -> float:
     return round(_clamp(current + delta, 0.0, maximum), 2)
 
 
+def _drop_alarm(alarm, timer_id: str):
+    """Remove a timer's ringing alarm (if any); None when nothing rings."""
+    if not alarm:
+        return alarm
+    return [a for a in alarm if a["timer_id"] != timer_id] or None
+
+
 def _require_unbound(state: dict, pc_id: str) -> None:
     for tok, b in state["bindings"].items():
         if b["pc_id"] == pc_id:
@@ -200,28 +207,38 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         label = _opt_str(args, "label")
         d = _opt_int(args, "duration_s")
         r = _opt_int(args, "rounds")
+        # kind-mismatched fields are a client bug — reject, never silently no-op
+        if d is not None and t["kind"] != "alarm":
+            raise ActionError("duration_s belongs to an alarm timer")
+        if r is not None and t["kind"] != "rounds":
+            raise ActionError("rounds belongs to a rounds timer")
         if d is not None and not (1 <= d <= 24 * 3600):
             raise ActionError("duration_s must be 1..86400")
         if r is not None and not (1 <= r <= 99):
             raise ActionError("rounds must be 1..99")
         if label is not None:
-            t["label"] = st.sanitize_name(label, 60)
-        if d is not None and t["kind"] == "alarm":
+            t["label"] = st.sanitize_name(label, 60) or t["label"]
+        if d is not None:
             t["duration_s"] = d
             if t["status"] != "running":
                 t["status"] = "idle"
                 t["started_at"] = None
                 t["elapsed_before_pause"] = 0.0
-        if r is not None and t["kind"] == "rounds":
+            # re-timing a rung-out alarm clears its stale ring, same rule as
+            # the rounds branch and timer_reset (ticket 42)
+            state["alarm"] = _drop_alarm(state["alarm"], t["timer_id"])
+        if r is not None:
+            # re-rounding a rung-out timer means "give it more rounds" — the
+            # ringing alarm must go with it (ticket 42)
             t["rounds_total"] = r
             t["rounds_left"] = r
             t["status"] = "idle"
+            state["alarm"] = _drop_alarm(state["alarm"], t["timer_id"])
 
     elif action == "timer_delete":
         tid = str(_need(args, "timer_id"))
         state["timers"] = [t for t in state["timers"] if t["timer_id"] != tid]
-        if state["alarm"] and state["alarm"].get("timer_id") == tid:
-            state["alarm"] = None
+        state["alarm"] = _drop_alarm(state["alarm"], tid)
 
     elif action == "timer_start":
         t = _need_timer(state, args)
@@ -234,10 +251,13 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         else:
             t["started_at"] = st.now()
         t["status"] = "running"
+        # restarting a timer whose alarm is still ringing clears the ring
+        # (same rule timer_reset follows — ticket 42)
+        state["alarm"] = _drop_alarm(state["alarm"], t["timer_id"])
 
     elif action == "timer_pause":
-        t = st.find_timer(state, str(_need(args, "timer_id")))
-        if t is None or t["status"] != "running":
+        t = _need_timer(state, args)
+        if t["status"] != "running":
             raise ActionError("timer is not running")
         t["elapsed_before_pause"] = st.now() - t["started_at"]
         t["status"] = "paused"
@@ -249,19 +269,19 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         t["elapsed_before_pause"] = 0.0
         if t["kind"] == "rounds":
             t["rounds_left"] = t["rounds_total"]
-        if state["alarm"] and state["alarm"].get("timer_id") == t["timer_id"]:
-            state["alarm"] = None
+        state["alarm"] = _drop_alarm(state["alarm"], t["timer_id"])
 
     elif action == "timer_tick":
-        t = st.find_timer(state, str(_need(args, "timer_id")))
-        if t is None or t["kind"] != "rounds":
+        t = _need_timer(state, args)
+        if t["kind"] != "rounds":
             raise ActionError("no such rounds timer")
         if t["rounds_left"] <= 0:
             raise ActionError("timer already at zero — reset it")
         t["rounds_left"] -= 1
         if t["rounds_left"] == 0:
             t["status"] = "done"
-            state["alarm"] = {"timer_id": t["timer_id"], "label": t["label"]}
+            state["alarm"] = state["alarm"] or []
+            state["alarm"].append({"timer_id": t["timer_id"], "label": t["label"]})
             st.add_log(state, "timer", f"⏰ {t['label']} — time!")
 
     elif action == "alarm_dismiss":

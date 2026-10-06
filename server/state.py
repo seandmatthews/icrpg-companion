@@ -60,7 +60,7 @@ def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> d
         "bindings": {},
         "log": [],  # {ts, audience: "all"|"gm", actor, text}
         "milestones": [],  # {pc_id, pc_name, reason, ts}
-        "alarm": None,  # {"timer_id": ...} while an expired timer is ringing
+        "alarm": None,  # list of {"timer_id", "label"} while timers are ringing
     }
 
 
@@ -168,7 +168,10 @@ def check_timers(state: dict, now_s: float) -> bool:
             and now_s - t["started_at"] >= t["duration_s"]
         ):
             t["status"] = "done"
-            state["alarm"] = {"timer_id": t["timer_id"], "label": t["label"]}
+            # the alarm slot is a QUEUE: two timers expiring in the same tick
+            # both ring (ticket 42)
+            state["alarm"] = state["alarm"] or []
+            state["alarm"].append({"timer_id": t["timer_id"], "label": t["label"]})
             add_log(state, "timer", f"⏰ {t['label']} — time!")
             changed = True
     return changed
@@ -350,12 +353,26 @@ def _normalize_state(raw: dict) -> tuple[dict, list[str]]:
     if isinstance(created, str):
         state["created"] = created
 
-    for key, want in (("targets", dict), ("alarm", (dict, type(None)))):
+    for key, want in (("targets", dict),):
         val = raw.get(key)
         if isinstance(val, want):
             state[key] = val
         elif key in raw:
             notes.append(f"{key} had the wrong type — reset")
+    # alarm was a single dict before ticket 42's queue — accept both shapes
+    alarm = raw.get("alarm")
+    if alarm is None:
+        pass
+    elif isinstance(alarm, list):
+        state["alarm"] = [
+            a
+            for a in alarm
+            if isinstance(a, dict) and isinstance(a.get("timer_id"), str) and isinstance(a.get("label"), str)
+        ] or None
+    elif isinstance(alarm, dict) and isinstance(alarm.get("timer_id"), str):
+        state["alarm"] = [alarm]
+    elif "alarm" in raw:
+        notes.append("alarm had the wrong type — reset")
 
     for key, (allowed, required) in _ENTRY_SHAPE.items():
         val = raw.get(key)

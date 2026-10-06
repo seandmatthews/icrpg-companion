@@ -140,7 +140,7 @@ def test_rounds_timer_ticks_down_to_alarm(fresh_state):
     for _ in range(3):
         act(fresh_state, "timer_tick", {"timer_id": t["timer_id"]})
     assert t["status"] == "done" and t["rounds_left"] == 0
-    assert fresh_state["alarm"]["timer_id"] == t["timer_id"]
+    assert [a["timer_id"] for a in fresh_state["alarm"]] == [t["timer_id"]]
     with pytest.raises(ActionError, match="at zero"):
         act(fresh_state, "timer_tick", {"timer_id": t["timer_id"]})
     act(fresh_state, "alarm_dismiss")
@@ -161,7 +161,8 @@ def test_alarm_expiry_is_server_computed(fresh_state, monkeypatch):
     assert t["status"] == "running"
     fake["t"] += 2
     assert st.check_timers(fresh_state, st.now())
-    assert t["status"] == "done" and fresh_state["alarm"]["timer_id"] == t["timer_id"]
+    assert t["status"] == "done"
+    assert [a["timer_id"] for a in fresh_state["alarm"]] == [t["timer_id"]]
 
 
 def test_paused_alarm_resumes_with_elapsed_credit(fresh_state, monkeypatch):
@@ -428,3 +429,94 @@ def test_malformed_pack_fails_without_partial_apply(seated_state, monkeypatch, t
     (tmp_path / "str.json").write_text(json.dumps({"loot": [{"name": "X", "bonus": 5}]}), encoding="utf-8")
     with pytest.raises(ActionError, match="must be strings"):
         act(seated_state, "starter_load", {"pack": "str"})
+
+
+# -- timer state machine consistency (ticket 42) ------------------------------
+
+
+def _run_rounds_to_done(s, label):
+    act(s, "timer_add", {"kind": "rounds", "label": label, "rounds": 1})
+    t = next(x for x in s["timers"] if x["label"] == label)
+    act(s, "timer_tick", {"timer_id": t["timer_id"]})
+    return t
+
+
+def test_timer_update_clears_ringing_alarm(fresh_state):
+    t = _run_rounds_to_done(fresh_state, "ambush")
+    assert fresh_state["alarm"]  # ringing
+    act(fresh_state, "timer_update", {"timer_id": t["timer_id"], "rounds": 5})
+    assert fresh_state["alarm"] is None  # re-rounding = give it more rounds
+    assert t["status"] == "idle" and t["rounds_left"] == 5
+
+    # timer_start on a done alarm timer clears its ring too
+    act(fresh_state, "timer_add", {"kind": "alarm", "label": "boom", "duration_s": 1})
+    a = next(x for x in fresh_state["timers"] if x["label"] == "boom")
+    act(fresh_state, "timer_start", {"timer_id": a["timer_id"]})
+    a["status"] = "done"  # let it ring out (watcher would do this)
+    fresh_state["alarm"] = [{"timer_id": a["timer_id"], "label": "boom"}]
+    act(fresh_state, "timer_start", {"timer_id": a["timer_id"]})  # start again
+    assert fresh_state["alarm"] is None  # the stale ring went with it
+
+
+def test_timer_update_blank_label_keeps_label(fresh_state):
+    act(fresh_state, "timer_add", {"kind": "alarm", "label": "Sundown", "duration_s": 30})
+    t = fresh_state["timers"][0]
+    act(fresh_state, "timer_update", {"timer_id": t["timer_id"], "label": "   "})
+    assert t["label"] == "Sundown"
+    act(fresh_state, "timer_update", {"timer_id": t["timer_id"], "label": "Dusk"})
+    assert t["label"] == "Dusk"
+
+
+def test_timer_update_wrong_kind_field_rejected(fresh_state):
+    act(fresh_state, "timer_add", {"kind": "alarm", "label": "t", "duration_s": 60})
+    a = fresh_state["timers"][0]
+    with pytest.raises(ActionError, match="rounds belongs to a rounds timer"):
+        act(fresh_state, "timer_update", {"timer_id": a["timer_id"], "rounds": 5})
+    assert a["duration_s"] == 60  # untouched by the rejection
+    act(fresh_state, "timer_add", {"kind": "rounds", "label": "r", "rounds": 3})
+    r = fresh_state["timers"][1]
+    with pytest.raises(ActionError, match="duration_s belongs to an alarm timer"):
+        act(fresh_state, "timer_update", {"timer_id": r["timer_id"], "duration_s": 60})
+    assert r["rounds_total"] == 3
+    # coercion strictness matches timer_add (ticket 36's _opt_int)
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(fresh_state, "timer_update", {"timer_id": a["timer_id"], "duration_s": "12"})
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(fresh_state, "timer_update", {"timer_id": a["timer_id"], "duration_s": 10.5})
+    # re-timing a rung-out alarm clears its stale ring, like the rounds branch
+    a["status"] = "done"
+    fresh_state["alarm"] = [{"timer_id": a["timer_id"], "label": "t"}]
+    act(fresh_state, "timer_update", {"timer_id": a["timer_id"], "duration_s": 90})
+    assert fresh_state["alarm"] is None
+    assert a["duration_s"] == 90
+
+
+def test_pause_and_tick_unknown_timer_say_no_such_timer(fresh_state):
+    with pytest.raises(ActionError, match="no such timer"):
+        act(fresh_state, "timer_pause", {"timer_id": "tm_nope"})
+    with pytest.raises(ActionError, match="no such timer"):
+        act(fresh_state, "timer_tick", {"timer_id": "tm_nope"})
+
+
+def test_two_alarms_same_tick_both_surface(fresh_state, monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(st, "now", lambda: clock["now"])
+    for label in ("first", "second"):
+        act(fresh_state, "timer_add", {"kind": "alarm", "label": label, "duration_s": 10})
+        t = next(x for x in fresh_state["timers"] if x["label"] == label)
+        act(fresh_state, "timer_start", {"timer_id": t["timer_id"]})
+    clock["now"] = 1011.0  # both expire in the same tick
+    assert st.check_timers(fresh_state, st.now())
+    labels = {a["label"] for a in fresh_state["alarm"]}
+    assert labels == {"first", "second"}  # one did NOT swallow the other
+    act(fresh_state, "alarm_dismiss")
+    assert fresh_state["alarm"] is None
+
+
+def test_snapshot_old_single_alarm_dict_becomes_queue(tmp_path):
+    raw = {"schema": st.SCHEMA, "room_code": "ROOM", "gm_token": "tok",
+           "alarm": {"timer_id": "tm_1", "label": "old"}}
+    (tmp_path / st._SNAPSHOT_NAME).write_text(json.dumps(raw), encoding="utf-8")
+    state, reason = st.load_snapshot(str(tmp_path))
+    assert state["alarm"] == [{"timer_id": "tm_1", "label": "old"}]
+    assert reason is None
