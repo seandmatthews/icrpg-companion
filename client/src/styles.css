@@ -417,9 +417,20 @@ input[type="number"] {
   background: #58c470;
 }
 
-.conn-closed,
-.conn-connecting {
+.conn-closed {
   background: var(--red-hot);
+}
+
+/* connecting is amber and pulsing — visibly NOT the dead state (ticket 40) */
+.conn-connecting {
+  background: #d9a441;
+  animation: conn-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes conn-pulse {
+  50% {
+    opacity: 0.3;
+  }
 }
 
 .gm-grid {

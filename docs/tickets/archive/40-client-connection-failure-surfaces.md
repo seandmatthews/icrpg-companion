@@ -1,6 +1,6 @@
 # 40 — client connection failure surfaces
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds); manual phone click-throughs pending user verification.
 **Priority:** P2
 **Area:** `client/src/net.ts`, `client/src/App.tsx`, toast consumers
 (`GMView.tsx:427-431`, `PlayerView.tsx:127-131`), `GMView.tsx` (QR)
@@ -83,3 +83,31 @@ plus the build gate:
       phones joined → hellos are visibly staggered rather than one
       wave (server log timestamps).
 - [ ] `npm run build` green.
+
+## Implementation notes (2026-10-06)
+
+Landed in `client/src/net.ts`, `client/src/App.tsx`, 
+`client/src/views/GMView.tsx`, `client/src/styles.css`:
+
+- send() while the socket is down raises the toast ("reconnecting — try
+  again in a moment") instead of vanishing; toasts auto-dismiss after 6 s
+  (ts-guarded so a stale timer can't clear a newer error).
+- Auth failure returns to the form WITH the reason: net.ts's onAuthFail now
+  carries the server's message; GMFlow/PlayerFlow hold it in state (it
+  survives the unmount that used to eat it) and the forms render it in red.
+  A dead-server "Can't reach the table" card offers an explicit way back.
+- Reconnect backoff is jittered ([0.5×, 1.5×]); the retry timer self-clears;
+  visibilitychange probes an open socket / reconnects a closed one (never
+  CONNECTING/CLOSING); garbled and non-object server frames warn-and-drop.
+- Deviations (documented): the QR shows the origin-encoded URL during the
+  bootstrap window rather than a "generating…" gate — disclosed by the
+  modal's suspect warning (no lan_ip ⇒ suspect); the sub-millisecond
+  onVisible/onclose double-connect race is left (self-corrects on the next
+  hello).
+- Two review rounds: round 1 caught that the wrong-key message was still
+  never shown (the error died with the unmounted component) and that the
+  blanket auth-fail reset had destroyed ticket 33's "Turned away" screen —
+  the 4003 path no longer resets anything (comment documents the visibility-
+  probe exception). Round 2 approved clean.
+- Gates: `python -m pytest` — 90 passed; `npm run build` green. Manual
+  click-through criteria left unticked pending user phone verification.
