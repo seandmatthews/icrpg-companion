@@ -54,3 +54,12 @@
       status check is a type error (or equivalent union narrowing).
 - [ ] GM-then-player in one browser paints no wrong-role flash (manual or
       DOM test).
+
+## Related
+
+The 2026-10-06 full review found two sibling defects outside this
+ticket's triggers: `pc_delete`/`session_reset` orphan connected
+players into a knockless pending limbo (no join request is created on
+the demotion transition), and a two-tab device loses its live knock
+when either tab closes — both in ticket 37, same fix surface
+(`refresh_seats` / the ws `finally`).
