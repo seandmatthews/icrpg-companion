@@ -10,6 +10,8 @@ Roles: ``gm`` does everything; a player acts only through their bound
 
 from __future__ import annotations
 
+import math
+
 from . import state as st
 
 TIERS = ("common", "uncommon", "rare", "epic")
@@ -90,6 +92,28 @@ def _abilities(args: dict, key: str = "abilities") -> list[str]:
     return [st.sanitize_name(a, 60) for a in val if a.strip()][:6]
 
 
+def _finite_float(v, key: str) -> float:
+    """Convert a validated number to float: JSON ints are arbitrary-precision,
+    so float(10**400) raises OverflowError — that must be an ActionError too."""
+    try:
+        f = float(v)
+    except OverflowError:
+        raise ActionError(f"'{key}' must be a finite number")
+    if not math.isfinite(f):
+        raise ActionError(f"'{key}' must be a finite number")
+    return f
+
+
+def _need_number(args: dict, key: str) -> float:
+    """A required number that is validated, not coerced: float("abc") and
+    float(True) must raise ActionError, never ValueError, and NaN/Infinity
+    must never reach state math (ticket 32)."""
+    v = _need(args, key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ActionError(f"'{key}' must be a number")
+    return _finite_float(v, key)
+
+
 def _need_timer(state: dict, args: dict) -> dict:
     t = st.find_timer(state, str(_need(args, "timer_id")))
     if t is None:
@@ -142,8 +166,12 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["title"] = st.sanitize_name(_need_str(args, "title"), 80)
 
     elif action == "set_targets":
-        d = int(_need(args, "default"))
-        s = int(_need(args, "scene"))
+        d = _opt_int(args, "default")
+        s = _opt_int(args, "scene")
+        if d is None:
+            raise ActionError("missing 'default'")
+        if s is None:
+            raise ActionError("missing 'scene'")
         if not (2 <= d <= 30 and 2 <= s <= 30):
             raise ActionError("targets must be 2..30")
         state["targets"] = {"default": d, "scene": s}
@@ -166,23 +194,25 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["timers"].append(st.new_timer(label, kind, duration, rounds))
 
     elif action == "timer_update":
+        # validate everything, then mutate: a rejected update must leave the
+        # timer exactly as it was (ticket 32)
         t = _need_timer(state, args)
         label = _opt_str(args, "label")
+        d = _opt_int(args, "duration_s")
+        r = _opt_int(args, "rounds")
+        if d is not None and not (1 <= d <= 24 * 3600):
+            raise ActionError("duration_s must be 1..86400")
+        if r is not None and not (1 <= r <= 99):
+            raise ActionError("rounds must be 1..99")
         if label is not None:
             t["label"] = st.sanitize_name(label, 60)
-        d = _opt_int(args, "duration_s")
         if d is not None and t["kind"] == "alarm":
-            if not (1 <= d <= 24 * 3600):
-                raise ActionError("duration_s must be 1..86400")
             t["duration_s"] = d
             if t["status"] != "running":
                 t["status"] = "idle"
                 t["started_at"] = None
                 t["elapsed_before_pause"] = 0.0
-        r = _opt_int(args, "rounds")
         if r is not None and t["kind"] == "rounds":
-            if not (1 <= r <= 99):
-                raise ActionError("rounds must be 1..99")
             t["rounds_total"] = r
             t["rounds_left"] = r
             t["status"] = "idle"
@@ -250,17 +280,18 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         )
 
     elif action == "pc_update":
+        # validate everything, then mutate (ticket 32)
         pc = _need_pc(state, args)
         name = _opt_str(args, "name")
+        player_label = _opt_str(args, "player_label")
+        hm = _opt_int(args, "hearts_max")
+        if hm is not None and not (1 <= hm <= 20):
+            raise ActionError("hearts_max must be 1..20")
         if name is not None:
             pc["name"] = st.sanitize_name(name, 40) or pc["name"]
-        player_label = _opt_str(args, "player_label")
         if player_label is not None:
             pc["player_label"] = st.sanitize_name(player_label, 40)
-        hm = _opt_int(args, "hearts_max")
         if hm is not None:
-            if not (1 <= hm <= 20):
-                raise ActionError("hearts_max must be 1..20")
             pc["hearts_max"] = hm
             pc["hearts"] = min(pc["hearts"], hm)
 
@@ -274,7 +305,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
 
     elif action == "pc_hearts":
         pc = _need_pc(state, args)
-        pc["hearts"] = _shift_hearts(pc["hearts"], pc["hearts_max"], float(_need(args, "delta")))
+        pc["hearts"] = _shift_hearts(pc["hearts"], pc["hearts_max"], _need_number(args, "delta"))
 
     elif action == "npc_add":
         name = st.sanitize_name(_need_str(args, "name"), 40)
@@ -283,7 +314,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         hearts = args.get("hearts_max", 1)
         if isinstance(hearts, bool) or not isinstance(hearts, (int, float)):
             raise ActionError("'hearts_max' must be a number")
-        hearts = float(hearts)
+        hearts = _finite_float(hearts, "hearts_max")
         if not (0.5 <= hearts <= 40):
             raise ActionError("hearts_max must be 0.5..40")
         die = str(args.get("effort_die", "d6"))
@@ -292,25 +323,29 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["npcs"].append(st.new_npc(name, hearts, die, _abilities(args), _opt_bool(args, "visible", False)))
 
     elif action == "npc_update":
+        # validate everything, then mutate (ticket 32)
         npc = _need_npc(state, args)
         name = _opt_str(args, "name")
+        hearts = None
+        if "hearts_max" in args:
+            raw = args["hearts_max"]
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise ActionError("'hearts_max' must be a number")
+            hearts = _finite_float(raw, "hearts_max")
+            if not (0.5 <= hearts <= 40):
+                raise ActionError("hearts_max must be 0.5..40")
+        if "effort_die" in args and args["effort_die"] not in EFFORT_DICE:
+            raise ActionError("bad effort_die")
+        abilities = _abilities(args) if "abilities" in args else None
         if name is not None:
             npc["name"] = st.sanitize_name(name, 40) or npc["name"]
-        if "hearts_max" in args:
-            hearts = args["hearts_max"]
-            if isinstance(hearts, bool) or not isinstance(hearts, (int, float)):
-                raise ActionError("'hearts_max' must be a number")
-            hm = float(hearts)
-            if not (0.5 <= hm <= 40):
-                raise ActionError("hearts_max must be 0.5..40")
-            npc["hearts_max"] = hm
-            npc["hearts"] = min(npc["hearts"], hm)
+        if hearts is not None:
+            npc["hearts_max"] = hearts
+            npc["hearts"] = min(npc["hearts"], hearts)
         if "effort_die" in args:
-            if args["effort_die"] not in EFFORT_DICE:
-                raise ActionError("bad effort_die")
             npc["effort_die"] = args["effort_die"]
-        if "abilities" in args:
-            npc["abilities"] = _abilities(args)
+        if abilities is not None:
+            npc["abilities"] = abilities
 
     elif action == "npc_delete":
         nid = str(_need(args, "npc_id"))
@@ -325,7 +360,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
 
     elif action == "npc_hearts":
         npc = _need_npc(state, args)
-        npc["hearts"] = _shift_hearts(npc["hearts"], npc["hearts_max"], float(_need(args, "delta")))
+        npc["hearts"] = _shift_hearts(npc["hearts"], npc["hearts_max"], _need_number(args, "delta"))
 
     elif action == "loot_add":
         name = st.sanitize_name(_need_str(args, "name"), 60)
@@ -344,18 +379,19 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         )
 
     elif action == "loot_update":
+        # validate everything, then mutate (ticket 32)
         item = _need_item(state, args)
         name = _opt_str(args, "name")
+        bonus = _opt_str(args, "bonus")
+        description = _opt_str(args, "description")
+        if "tier" in args and args["tier"] not in TIERS:
+            raise ActionError("bad tier")
         if name is not None:
             item["name"] = st.sanitize_name(name, 60) or item["name"]
         if "tier" in args:
-            if args["tier"] not in TIERS:
-                raise ActionError("bad tier")
             item["tier"] = args["tier"]
-        bonus = _opt_str(args, "bonus")
         if bonus is not None:
             item["bonus"] = st.sanitize_name(bonus, 60)
-        description = _opt_str(args, "description")
         if description is not None:
             item["description"] = st.sanitize_name(description, 200)
 
@@ -402,7 +438,9 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         st.add_log(state, actor, f"{pc['name']} earned a milestone — {reason}")
 
     elif action == "milestone_delete":
-        idx = int(_need(args, "index"))
+        idx = _opt_int(args, "index")
+        if idx is None:
+            raise ActionError("missing 'index'")
         if not (0 <= idx < len(state["milestones"])):
             raise ActionError("no such milestone")
         state["milestones"].pop(idx)
@@ -453,7 +491,7 @@ def _player_action(state: dict, actor: str, pc_id: str, action: str, args: dict)
         st.add_log(state, actor, f"{pc['name']} tossed {item['name']} back into the pool")
 
     elif action == "player_hearts":
-        pc["hearts"] = _shift_hearts(pc["hearts"], pc["hearts_max"], float(_need(args, "delta")))
+        pc["hearts"] = _shift_hearts(pc["hearts"], pc["hearts_max"], _need_number(args, "delta"))
 
     else:
         raise ActionError(f"unknown player action '{action}'")

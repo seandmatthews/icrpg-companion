@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import socket
@@ -15,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import actions, state as st
 from .hub import Connection, Room
+
+_log = logging.getLogger("table-companion")
 
 CLIENT_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "client", "dist")
 
@@ -65,6 +68,7 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, title="table-companion")
     app.state_model = state  # for run.py banner + tests
+    app.state_room = room  # for tests (dead-conn / broadcast-race pinning)
     app.load_reason = load_reason  # snapshot fallback disclosure for the banner
 
     @app.get("/api/bootstrap")
@@ -93,6 +97,11 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                 except json.JSONDecodeError:
                     await room.send_error(conn, "garbled message")
                     continue
+                if not isinstance(msg, dict):
+                    # a non-object frame must be an error, never a crash
+                    # ("x" / [1] / null used to abort the socket, ticket 32)
+                    await room.send_error(conn, "garbled message")
+                    continue
                 mtype = msg.get("type")
 
                 if mtype == "ping":
@@ -104,7 +113,7 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                         await ws.close(code=4001)
                         return
                     conn.role = "gm"
-                    conn.device_token = msg.get("device_token")
+                    conn.device_token = str(msg.get("device_token") or "")
                     await room.send_to(conn)
 
                 elif mtype == "hello_player":
@@ -123,6 +132,12 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                     if conn.role not in ("gm", "player"):
                         await room.send_error(conn, "say hello first")
                         continue
+                    args = msg.get("args")
+                    if args is None:
+                        args = {}
+                    if not isinstance(args, dict):
+                        await room.send_error(conn, "args must be an object")
+                        continue
                     actor = "GM" if conn.role == "gm" else (conn.name or "Player")
                     try:
                         actions.apply_action(
@@ -130,7 +145,7 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                             conn.role,
                             actor,
                             str(msg.get("action", "")),
-                            msg.get("args") or {},
+                            args,
                             pc_id=conn.pc_id,
                         )
                         st.check_timers(room.state, st.now())
@@ -146,20 +161,25 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
         except WebSocketDisconnect:
             pass
         finally:
-            if conn in room.conns:
-                room.conns.remove(conn)
+            room._drop(conn)  # one guarded removal path everywhere (ticket 32)
             # a pending player who left is a ghost knock — clear it for the GM
             if conn.role == "pending" and conn.device_token and st.drop_join_request(room.state, conn.device_token):
                 room.commit()
                 await room.broadcast_to_gms()
 
     async def _timer_watcher(room: Room) -> None:
-        """Server-side alarm authority: expiry is resolved here, once."""
+        """Server-side alarm authority: expiry is resolved here, once.
+        A failed tick is logged, never fatal: a failed broadcast still leaves
+        the (idempotent) resolution in memory, delivered by the next action's
+        broadcast — but the watcher itself must not die (ticket 32)."""
         while True:
             await asyncio.sleep(1)
-            if st.check_timers(room.state, st.now()):
-                room.commit()
-                await room.broadcast()
+            try:
+                if st.check_timers(room.state, st.now()):
+                    room.commit()
+                    await room.broadcast()
+            except Exception:
+                _log.warning("timer watcher tick failed; will retry", exc_info=True)
 
     index_html = os.path.join(CLIENT_DIST, "index.html")
 
