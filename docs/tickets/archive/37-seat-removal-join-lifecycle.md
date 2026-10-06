@@ -1,6 +1,6 @@
 # 37 — seat-removal join lifecycle: knockless limbo and the two-tab knock
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P2
 **Area:** `server/hub.py` (refresh_seats, handle_hello_player),
 `server/app.py` (ws finally), extends ticket 33
@@ -59,3 +59,27 @@ multi-tab variant, not reject or restart.
       — regression guard tying into ticket 33: after a re-knock caused
       by `pc_delete`, `reject_join` removes it (no duplicate knock
       accumulation across repeated delete/re-seat cycles).
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/hub.py` (refresh_seats), `server/app.py` (ws finally),
+`tests/test_ws_flow.py` (four new tests):
+
+- Demotion re-knock: on the bound→pending transition, refresh_seats appends
+  a join request (guarded against rejected tokens and existing knocks) —
+  the triggering action's own broadcast carries the knock to the GM panel.
+  **Deviation from proposal (documented):** the proposal said to append AND
+  `broadcast_to_gms`; the landing lets the in-flight broadcast carry it
+  instead — equivalent (the only two binding-removal actions are followed
+  immediately by `broadcast()` with no intervening yield) and avoids a
+  duplicate GM frame. refresh_seats is now honestly documented as mutating.
+- Re-knock commits are batched: one snapshot write per refresh pass, not
+  one per demoted device (a full-table session_reset demotes N players).
+- Two-tab knock: the ws finally drops the join request only when no other
+  live non-GM conn shares the device token.
+- Reject/re-knock interplay pinned end to end by
+  `test_reject_after_reknock_still_sticks` (a rejected demotion is silent,
+  a re-hello after rejection shows the refusal with an empty knock panel).
+- Two review rounds; round 1 approved with P3 nits (batching, GM-token
+  exclusion, redundant close, docstring) — all fixed, round 2 confirmed.
+- Gates: `python -m pytest` — 73 passed (twice for flake check).
