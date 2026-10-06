@@ -1,6 +1,6 @@
 # 38 — WS surface hardening: pre-auth disclosure, handler robustness, knock abuse
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (three review rounds; round 2 caught a flaky test and a guard-coverage claim that didn't hold).
 **Priority:** P2
 **Area:** `server/app.py` (ws handler, bootstrap), `server/hub.py`
 (broadcast, join_requests)
@@ -95,3 +95,38 @@ model ever changes (semi-public Wi-Fi); re-litigate only then.
       the outer gate, GM approval is the real boundary; the room code
       is a convenience, not a secret) — the doc line lands with this
       ticket.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/hub.py`, `server/app.py`, `DESIGN.md` (§10 ruling
+paragraph), `tests/test_ws_flow.py`:
+
+- Pre-auth disclosure closed: broadcast fan-out skips role-None conns, and
+  the watcher sweeps never-helloed sockets with `close(4000)` after
+  `HELLO_DEADLINE` (10s; sweep runs AFTER timer authority so a failing close
+  never delays an alarm). Pinned by `test_silent_socket_receives_no_state`
+  and `test_unhelloed_socket_is_closed`.
+- Cross-site Origin handshakes (incl. `Origin: null`) refused pre-accept;
+  absent Origin (non-browser) allowed per the LAN stance. The legitimate
+  client can never be rejected (its Origin netloc == Host by construction).
+- Handler robustness: the whole per-message dispatch (parse, shape checks,
+  sends) sits inside one guard — `except WebSocketDisconnect: raise` /
+  `except Exception: log + return` — so a failing send to a dying socket is
+  a quiet reap, never an unhandled ASGI error. Pinned by
+  `test_client_drop_during_send_is_quiet` (caplog: zero ERROR records).
+- GM key compared via `secrets.compare_digest` on utf-8 bytes (non-ASCII
+  keys now get the readable "wrong GM key", not a TypeError).
+- Knock flood capped: `KNOCK_CAP = 50`, oldest evicted, via the shared
+  `Room._record_knock` used by hello AND demotion re-knocks. Pinned state-
+  level with a monkeypatched cap of 5.
+- Tokenless hello_player rejected (readable error + 4002 close) — the
+  server-minted ghost-identity path is gone; every real client mints its own
+  token client-side (ticket 34).
+- Deviations (documented): the tokenless contract landed as REJECT rather
+  than return-the-minted-token (cleaner identity model, no client impact);
+  no per-conn knock rate limit — the cap bounds the damage. The GM stale-
+  room cache flash residual stays with tickets 40/41.
+- Three review rounds: round 2 caught a flaky AC test (2s recv racing the
+  sweep) and that a patch had not actually moved the garbled-message sends
+  inside the guard — both fixed; the ws loop was rewritten cleanly in one
+  piece after patch damage. Gates: `python -m pytest` — 79 passed ×3.
