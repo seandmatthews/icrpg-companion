@@ -19,7 +19,7 @@ function Card({ title, children, className }: { title?: string; children: React.
   );
 }
 
-function QRModal({ url, roomCode, onClose }: { url: string; roomCode: string; onClose: () => void }) {
+function QRModal({ url, roomCode, suspect, onClose }: { url: string; roomCode: string; suspect: boolean; onClose: () => void }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     QRCode.toDataURL(url, { width: 512, margin: 2, color: { dark: "#16161a", light: "#f5f0e6" } }).then(setSrc);
@@ -29,6 +29,13 @@ function QRModal({ url, roomCode, onClose }: { url: string; roomCode: string; on
       <div className="modal qr-modal" onClick={(e) => e.stopPropagation()}>
         <h2>Seat the players</h2>
         {src ? <img src={src} alt="join QR code" className="qr-img" /> : <p>generating…</p>}
+        {suspect && (
+          <p className="hint">
+            Heads up: the server couldn't tell this console its LAN address, so this QR may
+            point at this laptop instead of the table. Close and reopen Show QR once the
+            server is answering.
+          </p>
+        )}
         <p className="qr-url">{url}</p>
         <p className="qr-room">
           room code <strong>{roomCode}</strong>
@@ -190,7 +197,15 @@ function exportReport(v: ActiveView) {
   URL.revokeObjectURL(a.href);
 }
 
-export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: Bootstrap | null }) {
+export function GMView({
+  conn,
+  bootstrap,
+  bootstrapFailed = false,
+}: {
+  conn: RoomConn<"gm">;
+  bootstrap: Bootstrap | null;
+  bootstrapFailed?: boolean;
+}) {
   const { view, send } = conn;
   const now = useNow(500);
   useWakeLock(true);
@@ -223,9 +238,12 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
   const boundIds = new Set(Object.values(view.bindings ?? {}).map((b: { pc_id: string }) => b.pc_id));
   const seatable = party.filter((p) => !boundIds.has(p.pc_id));
 
+  // a failed/absent bootstrap falls back to this machine's address, which a
+  // phone can't join — the modal discloses it instead of encoding it silently
   const playersUrl = bootstrap?.lan_ip
     ? `${location.protocol}//${bootstrap.lan_ip}:${location.port}/join?room=${view.room_code}`
     : `${location.origin}/join?room=${view.room_code}`;
+  const qrSuspect = bootstrapFailed || !bootstrap?.lan_ip;
 
   return (
     <div className="gm-view">
@@ -507,7 +525,9 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
         </div>
       </div>
 
-      {showQR && <QRModal url={playersUrl} roomCode={view.room_code} onClose={() => setShowQR(false)} />}
+      {showQR && (
+        <QRModal url={playersUrl} roomCode={view.room_code} suspect={qrSuspect} onClose={() => setShowQR(false)} />
+      )}
       {conn.error && (
         <div key={conn.error.ts} className="toast">
           {conn.error.message}
