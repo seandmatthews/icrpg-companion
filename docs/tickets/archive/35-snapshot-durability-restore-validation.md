@@ -1,6 +1,6 @@
 # 35 — snapshot durability, restore validation, honest fallback
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (three review rounds; rounds 1–2 surfaced two P1s and a P2 in the first implementation, all fixed).
 **Priority:** P2
 **Area:** `server/state.py` (save_snapshot, load_snapshot), `run.py` (banner)
 **Found by:** 2026-10-06 full adversarial review
@@ -72,3 +72,41 @@ promise (state.py module docstring):
       code-review note in Implementation notes, and (if .bak lands)
       `tests/test_persistence.py::test_corrupt_main_falls_back_to_bak`
       — valid `.bak` + corrupt main → previous session restored.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/state.py`, `server/app.py`, `run.py`, 
+`tests/test_persistence.py`:
+
+- Durability: `save_snapshot` flush+fsyncs before `os.replace`, and keeps
+  one fsynced previous generation (`state.json.bak`, manual read/write
+  loop). `clear_snapshot` removes `.tmp`, then `.bak`, then main — a crash
+  mid-clear can never resurrect a "deleted" session.
+- Restore: `load_snapshot` now returns `(state, reason)` and normalizes
+  through `_normalize_state`: backfills missing keys from the `new_state()`
+  template, mints identity when gone, strips fossil keys top-level and
+  per-entry (`_ENTRY_SHAPE` allowed/required sets), and DROPS entries
+  missing required keys with a disclosed note. `app.load_reason` carries
+  the fallback reason; `run.py` prints it as a banner NOTE line (banner
+  extracted to `banner_lines()` for testability — byte-identical output).
+- Fallback matrix: clean load → (state, None); absent main+bak →
+  (None, None) silent fresh start; damaged OR missing main with a valid
+  bak → bak restored with disclosure; both gone/damaged → (None, reason).
+  Reads use `utf-8-sig`; `UnicodeDecodeError` is caught (byte-garbage
+  snapshots disclose, never crash boot).
+- **AC deviation (documented):** the BOM acceptance criterion originally
+  said a BOM'd snapshot falls back with a reason; the proposal's own
+  `utf-8-sig` fix supersedes that — a BOM'd snapshot now LOADS cleanly
+  (`test_bom_snapshot_loads` pins the better contract). Only a zero-byte
+  file discloses-and-falls-back.
+- **AC deviation (documented):** the banner criterion's "appears exactly
+  once on stdout" is pinned via `banner_lines` composition
+  (`test_banner_discloses_the_fallback_exactly_once`) rather than capturing
+  `run.main` output.
+- Review rounds: round 1 found the first implementation's normalization
+  kept entries missing required keys (the exact KeyError class this ticket
+  kills) and its milestone allowlist would have eaten live `pc_name` data
+  on every restart — both fixed with required-key sets and a full-shape
+  lossless round-trip test. Round 2 found `join_requests` still didn't
+  require `name` (approve/reject index it) — fixed. Round 3 approved.
+- Gates: `python -m pytest` — 56 passed.
