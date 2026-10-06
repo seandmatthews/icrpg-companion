@@ -416,18 +416,26 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
     elif action == "approve_join":
         token = str(_need(args, "device_token"))
         req = next((r for r in state["join_requests"] if r["device_token"] == token), None)
-        if req is None:
+        if req is None and not st.is_rejected(state, token):
             raise ActionError("no such join request")
         pc = _need_pc(state, args)
         _require_unbound(state, pc["pc_id"])
-        st.drop_join_request(state, token)
+        # only consume the request once every validation passed — a failed
+        # approve must leave it retryable
+        if req is not None:
+            st.drop_join_request(state, token)
+        state["rejections"] = [r for r in state["rejections"] if r["device_token"] != token]
         state["bindings"][token] = {"pc_id": pc["pc_id"]}
-        st.add_log(state, actor, f"{req['name']} sat down as {pc['name']}")
+        st.add_log(state, actor, f"{req['name'] if req else 'A returning player'} sat down as {pc['name']}")
 
     elif action == "reject_join":
         token = str(_need(args, "device_token"))
+        if state["bindings"].get(token) is not None:
+            raise ActionError("that device is seated — delete the character first")
         req = next((r for r in state["join_requests"] if r["device_token"] == token), None)
         st.drop_join_request(state, token)
+        if not st.is_rejected(state, token):
+            state["rejections"].append({"device_token": token, "name": req["name"] if req else ""})
         if req:
             st.add_log(state, actor, f"turned {req['name']} away", audience="gm")
 

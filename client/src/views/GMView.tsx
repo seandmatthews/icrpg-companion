@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import type { Bootstrap, StateView } from "../types";
+import type { ActiveView, Bootstrap } from "../types";
 import type { RoomConn } from "../net";
 import { useNow, useWakeLock } from "../util";
 import { HeartStepper } from "../components/Hearts";
@@ -141,7 +141,7 @@ function AddNpcForm({ send }: { send: RoomConn["send"] }) {
   );
 }
 
-function exportReport(v: StateView) {
+function exportReport(v: ActiveView) {
   const loot = v.loot ?? [];
   const party = v.party ?? [];
   const nameOf = (pcId: string | null) => party.find((p) => p.pc_id === pcId)?.name ?? null;
@@ -163,7 +163,7 @@ function exportReport(v: StateView) {
   URL.revokeObjectURL(a.href);
 }
 
-export function GMView({ conn, bootstrap }: { conn: RoomConn; bootstrap: Bootstrap | null }) {
+export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: Bootstrap | null }) {
   const { view, send } = conn;
   const now = useNow(500);
   useWakeLock(true);
@@ -234,6 +234,32 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn; bootstrap: Bootstr
               <button className="btn btn-sm" onClick={() => send("reject_join", { device_token: r.device_token })}>
                 Turn away
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(view.rejections?.length ?? 0) > 0 && (
+        <div className="knock-panel">
+          {view.rejections!.map((r) => (
+            <div key={r.device_token} className="knock">
+              <strong>{r.name || "A turned-away player"}</strong> was turned away
+              <select
+                defaultValue=""
+                onChange={(e) => {
+                  if (e.target.value) send("approve_join", { device_token: r.device_token, pc_id: e.target.value });
+                  e.target.value = "";
+                }}
+              >
+                <option value="" disabled>
+                  seat anyway…
+                </option>
+                {seatable.map((p) => (
+                  <option key={p.pc_id} value={p.pc_id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </div>
           ))}
         </div>

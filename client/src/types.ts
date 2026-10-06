@@ -60,7 +60,20 @@ export interface Milestone {
   ts: string;
 }
 
-export interface StateView {
+// The pending view omits every full-view collection, so StateView is a
+// discriminated union on `status`: narrowing on status === "pending" gives
+// the compiler permission to touch only the pending fields (ticket 33).
+export interface PendingView {
+  schema: string;
+  version: number;
+  room_code: string;
+  title: string;
+  status: "pending";
+  rejected?: true;
+  party: { pc_id: string; name: string; player_label: string }[];
+}
+
+export interface ActiveView {
   schema: string;
   version: number;
   room_code: string;
@@ -72,13 +85,16 @@ export interface StateView {
   npcs?: NPC[];
   loot?: Item[];
   join_requests?: JoinRequest[];
+  rejections?: JoinRequest[];
   bindings?: Record<string, { pc_id: string }>;
   log?: LogEntry[];
   milestones?: Milestone[];
   alarm: { timer_id: string; label: string } | null;
   you?: { pc_id: string };
-  status?: "pending";
+  status?: undefined;
 }
+
+export type StateView = PendingView | ActiveView;
 
 export interface Bootstrap {
   room_code: string;

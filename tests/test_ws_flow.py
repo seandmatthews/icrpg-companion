@@ -368,3 +368,55 @@ def test_watcher_survives_dead_conn(ns):
             time.sleep(0.05)
         assert dead not in room.conns, "dead conn was never reaped"
         do(gm, "log_note", text="watcher alive")  # server fully functional
+
+
+# -- join/reject lifecycle (ticket 33) ----------------------------------------
+
+
+def test_reject_join_notifies_and_sticks(ns):
+    with gm_session(ns) as gm:
+        with player_session(ns, "dev-rej", name="Lurker") as pws:
+            pws.recv()  # pending
+            gm.recv()   # the knock
+
+            gm.send(type="action", action="reject_join", args={"device_token": "dev-rej"})
+            gm.recv()  # the reject broadcast
+
+            # the rejected socket gets its refusal painted, then a 4003 close
+            refusal = pws.recv()
+            assert refusal["type"] == "state"
+            assert refusal["state"].get("rejected") is True
+            _assert_closed_with(pws, 4003)
+
+        # a reload re-hellos with the same token: still rejected, and the
+        # knock panel must NOT see them again
+        with player_session(ns, "dev-rej", name="Lurker") as pws2:
+            again = pws2.recv()
+            assert again["state"]["status"] == "pending"
+            assert again["state"].get("rejected") is True
+            gm_view = do(gm, "log_note", text="probe")
+            assert not any(r["device_token"] == "dev-rej" for r in gm_view["join_requests"])
+
+        assert any(r["device_token"] == "dev-rej" for r in ns.state["rejections"])
+
+        # the GM can still explicitly seat a rejected device
+        do(gm, "pc_add", name="Second")
+        pc_id = ns.state["party"][0]["pc_id"]
+        with player_session(ns, "dev-rej", name="Lurker") as pws3:
+            pws3.recv()  # pending + rejected, no knock
+            gm.send(type="action", action="approve_join", args={"device_token": "dev-rej", "pc_id": pc_id})
+            seated = pws3.recv()["state"]
+            assert seated["you"]["pc_id"] == pc_id
+        assert "dev-rej" not in ns.state["rejections"]
+
+
+def test_stale_snapshot_knock_pruned_on_boot(tmp_path):
+    from server import state as st
+
+    s = st.new_state("ROOM", "tok")
+    s["join_requests"].append({"device_token": "ghost", "name": "Ghost"})
+    st.save_snapshot(s, str(tmp_path))
+
+    with TestServer(str(tmp_path), fresh=False) as srv:
+        # the knocking client is long gone — the ghost must not linger
+        assert srv.app.state_model["join_requests"] == []

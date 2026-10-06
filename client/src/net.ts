@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { StateView } from "./types";
+import type { ActiveView, StateView } from "./types";
 import { cacheView, cachedView, getDevice } from "./util";
 
 type Role = "gm" | "player";
 type ConnStatus = "connecting" | "open" | "closed";
 
-export interface RoomConn {
+export interface RoomConn<R extends Role = Role> {
   status: ConnStatus;
-  view: StateView | null;
+  // the GM always receives a full view; a player may receive the pending one
+  view: (R extends "gm" ? ActiveView : StateView) | null;
   error: { message: string; ts: number } | null;
   skew: number; // server_time - local_time (seconds)
   send: (action: string, args?: Record<string, unknown>) => void;
@@ -17,11 +18,17 @@ export interface RoomConn {
  * One WebSocket, hello on open, full-state on every message. Reconnect with
  * backoff; every reconnect re-sends hello and gets a full fresh state, which
  * is the whole sync model. The latest view is also mirrored to localStorage
- * so a reload paints instantly from cache before the server answers.
+ * (per role — ticket 33) so a reload paints instantly from cache before the
+ * server answers.
  */
-export function useRoom(role: Role, opts: { room?: string; name?: string; gmKey?: string; onAuthFail?: () => void }): RoomConn {
+export function useRoom<R extends Role>(role: R, opts: { room?: string; name?: string; gmKey?: string; onAuthFail?: () => void }): RoomConn<R> {
   const [status, setStatus] = useState<ConnStatus>("connecting");
-  const [view, setView] = useState<StateView | null>(() => (cachedView() as StateView) ?? null);
+  const [view, setView] = useState<StateView | null>(() => {
+    const cached = cachedView(role) as StateView | null;
+    // a player's cache is only painted for the room they are joining
+    if (role === "player" && opts.room && cached && cached.room_code !== opts.room) return null;
+    return cached;
+  });
   const [error, setError] = useState<{ message: string; ts: number } | null>(null);
   const [skew, setSkew] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
@@ -60,7 +67,7 @@ export function useRoom(role: Role, opts: { room?: string; name?: string; gmKey?
         if (msg.type === "state") {
           setSkew(msg.server_time - Date.now() / 1000);
           setView(msg.state);
-          cacheView(msg.state);
+          cacheView(msg.state, role);
         } else if (msg.type === "error") {
           setError({ message: msg.message, ts: Date.now() });
           if (msg.code === "auth") {
@@ -73,9 +80,15 @@ export function useRoom(role: Role, opts: { room?: string; name?: string; gmKey?
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (pingTimer) window.clearInterval(pingTimer);
         setStatus("closed");
+        if (ev.code === 4003) {
+          // the GM turned this knock away: clear the saved seat, don't
+          // reconnect — the refused screen is already painted (ticket 33)
+          onAuthFail.current?.();
+          return;
+        }
         if (closedByUs) return; // auth failure: don't loop
         retryTimer = window.setTimeout(connect, retryMs.current);
         retryMs.current = Math.min(retryMs.current * 2, 5000);
@@ -98,5 +111,5 @@ export function useRoom(role: Role, opts: { room?: string; name?: string; gmKey?
     }
   }, []);
 
-  return { status, view, error, skew, send };
+  return { status, view: view as RoomConn<R>["view"], error, skew, send };
 }

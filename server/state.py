@@ -53,6 +53,9 @@ def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> d
         "npcs": [],
         "loot": [],
         "join_requests": [],
+        # devices the GM turned away: a reload must not re-knock (ticket 33).
+        # The name is kept so the GM console can offer to seat them again.
+        "rejections": [],
         # device_token -> {"pc_id": ...}
         "bindings": {},
         "log": [],  # {ts, audience: "all"|"gm", actor, text}
@@ -201,8 +204,8 @@ def _player_view(state: dict, pc_id: str) -> dict:
     return view
 
 
-def _pending_view(state: dict) -> dict:
-    return {
+def _pending_view(state: dict, rejected: bool = False) -> dict:
+    view = {
         "schema": state["schema"],
         "version": state["version"],
         "room_code": state["room_code"],
@@ -213,6 +216,9 @@ def _pending_view(state: dict) -> dict:
             for p in state["party"]
         ],
     }
+    if rejected:
+        view["rejected"] = True
+    return view
 
 
 def _gm_view(state: dict) -> dict:
@@ -221,12 +227,17 @@ def _gm_view(state: dict) -> dict:
     return view
 
 
-def view_for(state: dict, role: str, pc_id: str | None = None) -> dict:
+def view_for(state: dict, role: str, pc_id: str | None = None, device_token: str | None = None) -> dict:
     if role == "gm":
         return _gm_view(state)
     if role == "player" and pc_id:
         return _player_view(state, pc_id)
-    return _pending_view(state)
+    rejected = device_token is not None and is_rejected(state, device_token)
+    return _pending_view(state, rejected)
+
+
+def is_rejected(state: dict, device_token: str) -> bool:
+    return any(r["device_token"] == device_token for r in state["rejections"])
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +300,7 @@ _ENTRY_SHAPE = {
         },
     ),
     "join_requests": ({"device_token", "name"}, {"device_token", "name"}),
+    "rejections": ({"device_token", "name"}, {"device_token"}),
     "milestones": ({"pc_id", "pc_name", "reason", "ts"}, {"pc_id"}),
 }
 _LOG_ALLOWED = {"ts", "audience", "actor", "text"}
