@@ -67,6 +67,7 @@ def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> d
 def add_log(state: dict, actor: str, text: str, audience: str = "all") -> None:
     state["log"].append(
         {
+            "id": id4("lg"),  # stable key for clients (ticket 50)
             "ts": now_iso(),
             "audience": audience,
             "actor": actor,
@@ -304,9 +305,9 @@ _ENTRY_SHAPE = {
     ),
     "join_requests": ({"device_token", "name"}, {"device_token", "name"}),
     "rejections": ({"device_token", "name"}, {"device_token"}),
-    "milestones": ({"pc_id", "pc_name", "reason", "ts"}, {"pc_id"}),
+    "milestones": ({"id", "pc_id", "pc_name", "reason", "ts"}, {"pc_id"}),
 }
-_LOG_ALLOWED = {"ts", "audience", "actor", "text"}
+_LOG_ALLOWED = {"id", "ts", "audience", "actor", "text"}
 _LOG_REQUIRED = {"ts", "audience", "actor", "text"}
 
 
@@ -342,8 +343,8 @@ def _normalize_state(raw: dict) -> tuple[dict, list[str]]:
         session_id = None
     state = new_state(room_code, gm_token, session_id)
 
-    if isinstance(raw.get("title"), str) and raw["title"]:
-        state["title"] = raw["title"]
+    if isinstance(raw.get("title"), str):
+        state["title"] = raw["title"]  # empty is legitimate (ticket 50)
     elif "title" in raw:
         notes.append("title was malformed — reset to the default")
     version = raw.get("version")
@@ -391,6 +392,13 @@ def _normalize_state(raw: dict) -> tuple[dict, list[str]]:
             notes.append(f"log: {dropped} invalid entries dropped")
     elif "log" in raw:
         notes.append("log had the wrong type — reset")
+    # pre-50 milestones/log entries carry no stable id — mint one on load
+    for m in state["milestones"]:
+        if not m.get("id"):
+            m["id"] = id4("ms")
+    for e in state["log"]:
+        if not e.get("id"):
+            e["id"] = id4("lg")
 
     bindings = raw.get("bindings")
     if isinstance(bindings, dict):

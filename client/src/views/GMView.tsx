@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
 import type { ActiveView, Bootstrap } from "../types";
 import type { RoomConn } from "../net";
@@ -42,16 +42,27 @@ function QRModal({ url, roomCode, onClose }: { url: string; roomCode: string; on
   );
 }
 
-function AddTimerForm({ send }: { send: RoomConn["send"] }) {
+function AddTimerForm({ send, version }: { send: RoomConn["send"]; version: number }) {
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<"alarm" | "rounds">("alarm");
   const [minutes, setMinutes] = useState(10);
   const [rounds, setRounds] = useState(5);
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  // fields clear on the SUCCESS echo — a dropped send keeps the typed label
+  useEffect(() => {
+    if (sentAt != null && version !== sentAt) {
+      setLabel("");
+      setSentAt(null);
+    }
+  }, [version, sentAt]);
+  const mins = Math.round(minutes);
+  const r = Math.round(rounds);
+  const valid = !!label.trim() && (kind === "alarm" ? mins >= 1 && mins <= 1440 : r >= 1 && r <= 99);
   const add = () => {
-    if (!label.trim()) return;
-    if (kind === "alarm") send("timer_add", { label, kind, duration_s: Math.round(minutes * 60) });
-    else send("timer_add", { label, kind, rounds });
-    setLabel("");
+    if (!valid) return;
+    if (kind === "alarm") send("timer_add", { label, kind, duration_s: mins * 60 });
+    else send("timer_add", { label, kind, rounds: r });
+    setSentAt(version);  // clear on echo
   };
   return (
     <div className="form-row">
@@ -65,24 +76,31 @@ function AddTimerForm({ send }: { send: RoomConn["send"] }) {
       ) : (
         <input type="number" min={1} max={99} value={rounds} onChange={(e) => setRounds(+e.target.value)} title="rounds" />
       )}
-      <button className="btn" onClick={add}>
+      <button className="btn" onClick={add} disabled={!valid}>
         Add
       </button>
     </div>
   );
 }
 
-function AddLootForm({ send }: { send: RoomConn["send"] }) {
+function AddLootForm({ send, version }: { send: RoomConn["send"]; version: number }) {
   const [name, setName] = useState("");
   const [tier, setTier] = useState("common");
   const [bonus, setBonus] = useState("");
   const [desc, setDesc] = useState("");
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (sentAt != null && version !== sentAt) {
+      setName("");
+      setBonus("");
+      setDesc("");
+      setSentAt(null);
+    }
+  }, [version, sentAt]);
   const add = () => {
     if (!name.trim()) return;
     send("loot_add", { name, tier, bonus, description: desc });
-    setName("");
-    setBonus("");
-    setDesc("");
+    setSentAt(version);  // clear on echo
   };
   return (
     <div className="loot-form">
@@ -99,7 +117,7 @@ function AddLootForm({ send }: { send: RoomConn["send"] }) {
       <div className="form-row">
         <input placeholder="bonus (+1 CHA…)" value={bonus} onChange={(e) => setBonus(e.target.value)} />
         <input placeholder="flavor text" value={desc} onChange={(e) => setDesc(e.target.value)} />
-        <button className="btn" onClick={add}>
+        <button className="btn" onClick={add} disabled={!name.trim()}>
           Add
         </button>
       </div>
@@ -107,22 +125,31 @@ function AddLootForm({ send }: { send: RoomConn["send"] }) {
   );
 }
 
-function AddNpcForm({ send }: { send: RoomConn["send"] }) {
+function AddNpcForm({ send, version }: { send: RoomConn["send"]; version: number }) {
   const [name, setName] = useState("");
   const [hearts, setHearts] = useState("1");
   const [die, setDie] = useState("d6");
   const [abilities, setAbilities] = useState("");
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (sentAt != null && version !== sentAt) {
+      setName("");
+      setAbilities("");
+      setSentAt(null);
+    }
+  }, [version, sentAt]);
+  const h = parseFloat(hearts);
+  const valid = !!name.trim() && h >= 0.5 && h <= 40 && h * 2 === Math.round(h * 2);
   const add = () => {
-    if (!name.trim()) return;
+    if (!valid) return;
     send("npc_add", {
       name,
-      hearts_max: parseFloat(hearts) || 1,
+      hearts_max: h,
       effort_die: die,
       abilities: abilities.split(",").map((a) => a.trim()).filter(Boolean),
       visible: false,
     });
-    setName("");
-    setAbilities("");
+    setSentAt(version);  // clear on echo
   };
   return (
     <div className="form-row">
@@ -134,7 +161,7 @@ function AddNpcForm({ send }: { send: RoomConn["send"] }) {
         ))}
       </select>
       <input placeholder="abilities, comma…" value={abilities} onChange={(e) => setAbilities(e.target.value)} />
-      <button className="btn" onClick={add}>
+      <button className="btn" onClick={add} disabled={!valid}>
         Add
       </button>
     </div>
@@ -170,6 +197,23 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
   const [showQR, setShowQR] = useState(false);
   const [note, setNote] = useState("");
   const [shareNote, setShareNote] = useState(false);
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+
+  // in-flight latch: a send inside the echo window is ignored, so a
+  // double-tap can't raise spurious "already …" toasts or duplicate loads
+  // (ticket 50). Cleared by the next commit (version) or the next error.
+  const version = view?.version ?? 0;
+  const errTs = conn.error?.ts ?? 0;
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setBusy(false), [view, errTs]);  // any fresh state frame clears
+  const gsend = useCallback(
+    (action: string, args?: Record<string, unknown>) => {
+      if (busy) return;
+      setBusy(true);
+      send(action, args);
+    },
+    [busy, send]
+  );
 
   if (!view) {
     return <div className="screen-center">connecting to the table…</div>;
@@ -188,8 +232,15 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
       <header className="topbar">
         <input
           className="title-input"
-          value={view.title}
-          onChange={(e) => send("set_title", { title: e.target.value })}
+          value={titleDraft ?? view.title}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={() => {
+            if (titleDraft !== null && titleDraft !== view.title) gsend("set_title", { title: titleDraft });
+            setTitleDraft(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
           aria-label="session title"
         />
         <span className="room-chip">
@@ -205,7 +256,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
         <div className="alarm-banner">
           ⏰ {view.alarm![0].label} — TIME!
           {(view.alarm ?? []).length > 1 && <span> (+{(view.alarm ?? []).length - 1} more)</span>}
-          <button className="btn" onClick={() => send("alarm_dismiss")}>
+          <button className="btn" onClick={() => gsend("alarm_dismiss")}>
             Dismiss
           </button>
         </div>
@@ -219,7 +270,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
               <select
                 defaultValue=""
                 onChange={(e) => {
-                  if (e.target.value) send("approve_join", { device_token: r.device_token, pc_id: e.target.value });
+                  if (e.target.value) gsend("approve_join", { device_token: r.device_token, pc_id: e.target.value });
                   e.target.value = "";
                 }}
               >
@@ -232,7 +283,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                   </option>
                 ))}
               </select>
-              <button className="btn btn-sm" onClick={() => send("reject_join", { device_token: r.device_token })}>
+              <button className="btn btn-sm" onClick={() => gsend("reject_join", { device_token: r.device_token })}>
                 Turn away
               </button>
             </div>
@@ -248,7 +299,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
               <select
                 defaultValue=""
                 onChange={(e) => {
-                  if (e.target.value) send("approve_join", { device_token: r.device_token, pc_id: e.target.value });
+                  if (e.target.value) gsend("approve_join", { device_token: r.device_token, pc_id: e.target.value });
                   e.target.value = "";
                 }}
               >
@@ -271,15 +322,15 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
           <Card title="Timers">
             <div className="timers-list">
               {view.timers.map((t) => (
-                <TimerGM key={t.timer_id} timer={t} skew={conn.skew} now={now} send={send} />
+                <TimerGM key={t.timer_id} timer={t} skew={conn.skew} now={now} send={gsend} busy={busy} />
               ))}
               {view.timers.length === 0 && <p className="hint">No timers yet. Alarm clocks count real time; room timers tick down per round.</p>}
             </div>
-            <AddTimerForm send={send} />
+            <AddTimerForm send={gsend} version={version} />
           </Card>
 
           <Card title="The Ladder">
-            <TNCard targets={view.targets} gm onDelta={(which, delta) => send("set_targets", { ...view.targets, [which]: view.targets[which] + delta })} />
+            <TNCard targets={view.targets} gm onDelta={(which, delta) => gsend("set_targets", { which, delta })} />
           </Card>
 
           <Card title="NPCs">
@@ -291,26 +342,26 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                     <span className="npc-die">{n.effort_die}</span>
                     <button
                       className={`btn btn-sm ${n.visible ? "" : "btn-go"}`}
-                      onClick={() => send("npc_reveal", { npc_id: n.npc_id, visible: !n.visible })}
+                      onClick={() => gsend("npc_reveal", { npc_id: n.npc_id, visible: !n.visible })}
                     >
                       {n.visible ? "on screen" : "reveal"}
                     </button>
-                    <button className="btn btn-sm btn-ghost" onClick={() => send("npc_delete", { npc_id: n.npc_id })}>
+                    <button className="btn btn-sm btn-ghost" onClick={() => gsend("npc_delete", { npc_id: n.npc_id })}>
                       ✕
                     </button>
                   </div>
-                  <HeartStepper current={n.hearts} max={n.hearts_max} onDelta={(d) => send("npc_hearts", { npc_id: n.npc_id, delta: d })} />
+                  <HeartStepper current={n.hearts} max={n.hearts_max} onDelta={(d) => gsend("npc_hearts", { npc_id: n.npc_id, delta: d })} />
                   {n.abilities.length > 0 && <div className="npc-abilities">{n.abilities.join(" · ")}</div>}
                 </div>
               ))}
             </div>
-            <AddNpcForm send={send} />
+            <AddNpcForm send={gsend} version={version} />
           </Card>
 
           <Card title="Table log">
             <div className="log-list">
-              {(view.log ?? []).slice().reverse().map((e, i) => (
-                <div key={i} className={`log-entry ${e.audience === "gm" ? "log-gm" : ""}`}>
+              {(view.log ?? []).slice().reverse().map((e) => (
+                <div key={e.id ?? e.ts} className={`log-entry ${e.audience === "gm" ? "log-gm" : ""}`}>
                   <span className="log-actor">{e.actor}</span> {e.text}
                 </div>
               ))}
@@ -322,7 +373,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                 onChange={(e) => setNote(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && note.trim()) {
-                    send("log_note", { text: note, share: shareNote });
+                    gsend("log_note", { text: note, share: shareNote });
                     setNote("");
                   }
                 }}
@@ -344,19 +395,25 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                   <div className="pc-head">
                     <strong>{p.name}</strong>
                     {p.player_label && <span className="player-label">({p.player_label})</span>}
-                    <button className="btn btn-sm btn-ghost" onClick={() => send("milestone_add", { pc_id: p.pc_id, reason: prompt(`Milestone for ${p.name}?`) ?? "" })}>
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => {
+                        const reason = prompt(`Milestone for ${p.name}?`);
+                        if (reason && reason.trim()) gsend("milestone_add", { pc_id: p.pc_id, reason });
+                      }}
+                    >
                       Milestone
                     </button>
                     <button
                       className="btn btn-sm btn-ghost"
                       onClick={() => {
-                        if (confirm(`Remove ${p.name}?`)) send("pc_delete", { pc_id: p.pc_id });
+                        if (confirm(`Remove ${p.name}?`)) gsend("pc_delete", { pc_id: p.pc_id });
                       }}
                     >
                       ✕
                     </button>
                   </div>
-                  <HeartStepper current={p.hearts} max={p.hearts_max} onDelta={(d) => send("pc_hearts", { pc_id: p.pc_id, delta: d })} />
+                  <HeartStepper current={p.hearts} max={p.hearts_max} onDelta={(d) => gsend("pc_hearts", { pc_id: p.pc_id, delta: d })} />
                   <div className="pc-inventory">
                     {loot.filter((i) => i.claimed_by === p.pc_id).map((i) => (
                       <span key={i.item_id} className="chip" title={i.description}>
@@ -367,7 +424,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                 </div>
               ))}
             </div>
-            <AddPcForm send={send} />
+            <AddPcForm send={gsend} version={version} />
           </Card>
 
           <Card title="Loot pool">
@@ -380,7 +437,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                       {owner ? (
                         <>
                           <span className="owner">→ {owner.name}</span>
-                          <button className="btn btn-sm" onClick={() => send("loot_assign", { item_id: i.item_id, pc_id: null })}>
+                          <button className="btn btn-sm" onClick={() => gsend("loot_assign", { item_id: i.item_id, pc_id: null })}>
                             Recall
                           </button>
                         </>
@@ -388,7 +445,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                         <select
                           defaultValue=""
                           onChange={(e) => {
-                            if (e.target.value) send("loot_assign", { item_id: i.item_id, pc_id: e.target.value });
+                            if (e.target.value) gsend("loot_assign", { item_id: i.item_id, pc_id: e.target.value });
                             e.target.value = "";
                           }}
                         >
@@ -402,7 +459,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                           ))}
                         </select>
                       )}
-                      <button className="btn btn-sm btn-ghost" onClick={() => send("loot_delete", { item_id: i.item_id })}>
+                      <button className="btn btn-sm btn-ghost" onClick={() => gsend("loot_delete", { item_id: i.item_id })}>
                         ✕
                       </button>
                     </div>
@@ -410,9 +467,9 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
                 );
               })}
             </div>
-            <AddLootForm send={send} />
+            <AddLootForm send={gsend} version={version} />
             {loot.length === 0 && (
-              <button className="btn" onClick={() => send("starter_load", { pack: "alfheim" })}>
+              <button className="btn" onClick={() => gsend("starter_load", { pack: "alfheim" })}>
                 Load Alfheim starter kit
               </button>
             )}
@@ -421,10 +478,10 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
           <Card title="Milestones">
             {(view.milestones ?? []).length === 0 && <p className="hint">None yet. Milestones are advancement earned at the table.</p>}
             <div className="milestone-list">
-              {(view.milestones ?? []).map((m, idx) => (
-                <div key={idx} className="milestone">
+              {(view.milestones ?? []).map((m) => (
+                <div key={m.id ?? `${m.pc_id}-${m.ts}`} className="milestone">
                   <strong>{m.pc_name}</strong> — {m.reason}
-                  <button className="btn btn-sm btn-ghost" onClick={() => send("milestone_delete", { index: idx })}>
+                  <button className="btn btn-sm btn-ghost" onClick={() => gsend("milestone_delete", { id: m.id })}>
                     ✕
                   </button>
                 </div>
@@ -440,7 +497,7 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
               className="btn btn-danger"
               onClick={() => {
                 if (confirm("Start a fresh session? Everything in this one is discarded (the snapshot too).")) {
-                  send("session_reset");
+                  gsend("session_reset");
                 }
               }}
             >
@@ -460,22 +517,30 @@ export function GMView({ conn, bootstrap }: { conn: RoomConn<"gm">; bootstrap: B
   );
 }
 
-function AddPcForm({ send }: { send: RoomConn["send"] }) {
+function AddPcForm({ send, version }: { send: RoomConn["send"]; version: number }) {
   const [name, setName] = useState("");
   const [label, setLabel] = useState("");
   const [hearts, setHearts] = useState(3);
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (sentAt != null && version !== sentAt) {
+      setName("");
+      setLabel("");
+      setSentAt(null);
+    }
+  }, [version, sentAt]);
+  const valid = !!name.trim() && Number.isInteger(hearts) && hearts >= 1 && hearts <= 20;
   const add = () => {
-    if (!name.trim()) return;
+    if (!valid) return;
     send("pc_add", { name, player_label: label, hearts_max: hearts });
-    setName("");
-    setLabel("");
+    setSentAt(version);  // clear on echo
   };
   return (
     <div className="form-row">
       <input placeholder="character name" value={name} onChange={(e) => setName(e.target.value)} />
       <input placeholder="player (optional)" value={label} onChange={(e) => setLabel(e.target.value)} />
       <input type="number" min={1} max={20} value={hearts} onChange={(e) => setHearts(+e.target.value)} title="hearts" />
-      <button className="btn" onClick={add}>
+      <button className="btn" onClick={add} disabled={!valid}>
         Add
       </button>
     </div>

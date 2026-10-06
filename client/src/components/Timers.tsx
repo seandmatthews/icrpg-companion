@@ -38,11 +38,13 @@ export function TimerGM({
   skew,
   now,
   send,
+  busy = false,
 }: {
   timer: Timer;
   skew: number;
   now: number;
   send: (action: string, args?: Record<string, unknown>) => void;
+  busy?: boolean;
 }) {
   const id = { timer_id: timer.timer_id };
   return (
@@ -71,7 +73,11 @@ export function TimerGM({
             )}
           </>
         ) : (
-          <button className="btn btn-go" onClick={() => send("timer_tick", id)}>
+          <button
+            className="btn btn-go"
+            disabled={busy || (timer.rounds_left ?? 0) <= 0}
+            onClick={() => send("timer_tick", id)}
+          >
             Tick round
           </button>
         )}

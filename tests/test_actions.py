@@ -214,10 +214,11 @@ def test_milestone_flow(seated_state):
     pc = seated_state["party"][0]
     act(seated_state, "milestone_add", {"pc_id": pc["pc_id"], "reason": "Held the causeway"})
     assert seated_state["milestones"][0]["pc_id"] == pc["pc_id"]
-    act(seated_state, "milestone_delete", {"index": 0})
+    mid = seated_state["milestones"][0]["id"]
+    act(seated_state, "milestone_delete", {"id": mid})
     assert seated_state["milestones"] == []
     with pytest.raises(ActionError):
-        act(seated_state, "milestone_delete", {"index": 5})
+        act(seated_state, "milestone_delete", {"id": mid})
 
 
 def test_targets_bounds(fresh_state):
@@ -396,8 +397,8 @@ def test_non_coercible_numbers_rejected(seated_state):
     assert pc["hearts"] == pc["hearts_max"]  # untouched by every rejection
     with pytest.raises(ActionError, match="must be an integer"):
         act(seated_state, "set_targets", {"default": "12a", "scene": 3})
-    with pytest.raises(ActionError, match="must be an integer"):
-        act(seated_state, "milestone_delete", {"index": "x"})
+    with pytest.raises(ActionError, match="missing 'id'"):
+        act(seated_state, "milestone_delete", {"id": ""})
 
 
 def test_malformed_pack_fails_without_partial_apply(seated_state, monkeypatch, tmp_path):
@@ -531,3 +532,44 @@ def test_claim_announcement_is_player_audience(seated_state):
     entry = seated_state["log"][-1]
     assert entry["audience"] == "all"
     assert "claimed" in entry["text"] and pc["name"] in entry["text"]
+
+
+# -- GM console input robustness, server half (ticket 50) ---------------------
+
+
+def test_set_title_empty_allowed(seated_state):
+    # the GM clears the title field — an empty title is legitimate
+    act(seated_state, "set_title", {"title": ""})
+    assert seated_state["title"] == ""
+    act(seated_state, "set_title", {"title": "   "})
+    assert seated_state["title"] == ""
+    act(seated_state, "set_title", {"title": "The Siege of Ford"})
+    assert seated_state["title"] == "The Siege of Ford"
+
+
+def test_milestone_delete_by_id(fresh_state):
+    act(fresh_state, "pc_add", {"name": "Vex"})
+    pc = fresh_state["party"][0]
+    act(fresh_state, "milestone_add", {"pc_id": pc["pc_id"], "reason": "first"})
+    act(fresh_state, "milestone_add", {"pc_id": pc["pc_id"], "reason": "second"})
+    ids = [m["id"] for m in fresh_state["milestones"]]
+    assert ids[0] != ids[1]
+    act(fresh_state, "milestone_delete", {"id": ids[0]})
+    assert [m["reason"] for m in fresh_state["milestones"]] == ["second"]  # the right one
+    with pytest.raises(ActionError, match="no such milestone"):
+        act(fresh_state, "milestone_delete", {"id": ids[0]})
+
+
+def test_set_targets_delta_shape(fresh_state):
+    # the TN card sends {which, delta} so fast taps can't lose decrements
+    act(fresh_state, "set_targets", {"which": "default", "delta": -1})
+    assert fresh_state["targets"]["default"] == 11
+    act(fresh_state, "set_targets", {"which": "scene", "delta": +1})
+    assert fresh_state["targets"]["scene"] == 15
+    act(fresh_state, "set_targets", {"which": "default", "delta": -20})  # clamped
+    assert fresh_state["targets"]["default"] == 2
+    with pytest.raises(ActionError, match="which"):
+        act(fresh_state, "set_targets", {"which": "middle", "delta": 1})
+    # absolute shape still works
+    act(fresh_state, "set_targets", {"default": 12, "scene": 14})
+    assert fresh_state["targets"] == {"default": 12, "scene": 14}

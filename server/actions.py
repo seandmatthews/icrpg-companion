@@ -170,18 +170,39 @@ def _require_unbound(state: dict, pc_id: str) -> None:
 
 def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
     if action == "set_title":
-        state["title"] = st.sanitize_name(_need_str(args, "title"), 80)
+        # empty is a legitimate title (the GM clears the field) — only a
+        # missing/non-string argument is rejected (ticket 50)
+        raw = args.get("title")
+        if raw is None:
+            raw = ""
+        if not isinstance(raw, str):
+            raise ActionError("'title' must be a string")
+        state["title"] = st.sanitize_name(raw, 80)
 
     elif action == "set_targets":
-        d = _opt_int(args, "default")
-        s = _opt_int(args, "scene")
-        if d is None:
-            raise ActionError("missing 'default'")
-        if s is None:
-            raise ActionError("missing 'scene'")
-        if not (2 <= d <= 30 and 2 <= s <= 30):
-            raise ActionError("targets must be 2..30")
-        state["targets"] = {"default": d, "scene": s}
+        # two shapes: absolute {default, scene}, or the TN card's delta
+        # {which, delta} — deltas can't lose fast taps (ticket 50)
+        if "which" in args or "delta" in args:
+            which = _need(args, "which")
+            if which not in ("default", "scene"):
+                raise ActionError("'which' must be default or scene")
+            delta = _need_number(args, "delta")
+            if delta != int(delta):
+                raise ActionError("'delta' must be an integer")
+            delta = int(delta)
+            other = "scene" if which == "default" else "default"
+            new = int(_clamp(int(state["targets"].get(which, 12)) + delta, 2, 30))
+            state["targets"] = {**state["targets"], other: int(state["targets"].get(other, 14)), which: new}
+        else:
+            d = _opt_int(args, "default")
+            s = _opt_int(args, "scene")
+            if d is None:
+                raise ActionError("missing 'default'")
+            if s is None:
+                raise ActionError("missing 'scene'")
+            if not (2 <= d <= 30 and 2 <= s <= 30):
+                raise ActionError("targets must be 2..30")
+            state["targets"] = {"default": d, "scene": s}
 
     elif action == "timer_add":
         kind = _need(args, "kind")
@@ -462,16 +483,19 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
     elif action == "milestone_add":
         pc = _need_pc(state, args)
         reason = st.sanitize_name(_need_str(args, "reason"), 140)
-        state["milestones"].append({"pc_id": pc["pc_id"], "pc_name": pc["name"], "reason": reason, "ts": st.now_iso()})
+        state["milestones"].append(
+            {"id": st.id4("ms"), "pc_id": pc["pc_id"], "pc_name": pc["name"], "reason": reason, "ts": st.now_iso()}
+        )
         st.add_log(state, actor, f"{pc['name']} earned a milestone — {reason}")
 
     elif action == "milestone_delete":
-        idx = _opt_int(args, "index")
-        if idx is None:
-            raise ActionError("missing 'index'")
-        if not (0 <= idx < len(state["milestones"])):
+        # delete by stable id, not index — index deletes mis-delete under
+        # render/echo skew (ticket 50)
+        mid = str(_need(args, "id"))
+        before = len(state["milestones"])
+        state["milestones"] = [m for m in state["milestones"] if m.get("id") != mid]
+        if len(state["milestones"]) == before:
             raise ActionError("no such milestone")
-        state["milestones"].pop(idx)
 
     elif action == "log_note":
         text = st.sanitize_name(_need_str(args, "text"), 200)
