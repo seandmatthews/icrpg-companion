@@ -71,11 +71,12 @@ export function PlayerView({ conn }: { conn: RoomConn }) {
   const loot = view.loot ?? [];
   const mine = loot.filter((i) => i.claimed_by === me.pc_id);
   const pool = loot.filter((i) => i.claimed_by === null);
-  const alarmShown = view.alarm && view.alarm.timer_id !== hushed;
+  // the alarm slot is a queue — show the first ring this player hasn't hushed
+  const ringing = (view.alarm ?? []).find((a) => a.timer_id !== hushed);
 
   return (
     <div className="player-view">
-      {alarmShown && view.alarm && <AlarmOverlay label={view.alarm.label} onQuiet={() => setHushed(view.alarm!.timer_id)} />}
+      {ringing && <AlarmOverlay label={ringing.label} onQuiet={() => setHushed(ringing.timer_id)} />}
 
       <div className="tn-mini">
         <TNCard targets={view.targets} />

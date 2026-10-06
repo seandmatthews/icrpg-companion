@@ -1,6 +1,6 @@
 # 42 — timer state machine consistency
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P3
 **Area:** `server/actions.py` (timer handlers), `server/state.py`
 (check_timers alarm slot), `client/src/components/Timers.tsx` (urgency)
@@ -90,7 +90,37 @@ real table — its own ticket, not part of this one.
       further action sent**; both receive a state with `alarm` set.
       This is the only test that exercises the watcher end to end —
       the one path ticket 32 suspects can silently die.
-- [ ] DESIGN.md §10 carries the wall-clock paragraph per the ruling
+- [x] DESIGN.md §10 carries the wall-clock paragraph per the ruling
       (deliberate tradeoff; backward = late, forward = early;
       detect-and-compensate named as the follow-up if it ever
       matters).
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/state.py`, `server/actions.py`, `client/src/types.ts`,
+`client/src/views/{GMView,PlayerView}.tsx`, `DESIGN.md`, and the test files:
+
+- **Chosen semantics: the alarm slot is a QUEUE.** `state["alarm"]` is a list
+  of `{timer_id, label}` — two timers expiring in the same watcher tick both
+  ring (pinned by `test_two_alarms_same_tick_both_surface` with a
+  monkeypatched clock). `alarm_dismiss` clears the whole queue (pinned);
+  per-alarm dismissal is a natural follow-up if a table ever runs several
+  concurrent alarms. Snapshot compat: old single-dict alarm loads as a
+  one-element list; junk entries are filtered (label-less entries rejected —
+  observability nit noted: the list filter drops garbage silently, unlike
+  the wrong-type branch which discloses).
+- All stale-ring leaks closed: `timer_update` rounds branch, `timer_update`
+  duration_s branch (review round 1 caught this sibling), `timer_start`,
+  `timer_reset`, `timer_delete` all drop the timer's ring via `_drop_alarm`.
+- Blank-label update keeps the old label; kind-mismatched fields rejected;
+  pause/tick report "no such timer"; coercion strictness aligned with
+  timer_add (round 1 verified this was already covered by ticket 36's
+  `_opt_int` — tests added this round).
+- Client: alarm is `{timer_id,label}[] | null`; GM banner shows the first
+  ring plus "(+N more)"; player overlay shows the first un-hushed ring.
+- Wall-clock ruling paragraph landed in DESIGN.md §10 (document and accept;
+  detect-and-compensate named as follow-up).
+- `test_alarm_rings_without_client_action` — the ticket's named end-to-end
+  watcher coverage (GM AND seated player sockets, no client action) — added;
+  the dead-conn variant from ticket 32 complements it.
+- Gates: `python -m pytest` — 86 passed ×2; `npm run build` green.

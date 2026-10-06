@@ -622,3 +622,33 @@ def test_client_drop_during_send_is_quiet(ns, caplog):
             do(gm, "log_note", text="two")  # the room is still fully alive
     errors = [r for r in caplog.records if r.levelname == "ERROR"]
     assert not errors, errors
+
+
+def test_alarm_rings_without_client_action(ns):
+    """Ticket 42's named criterion: the watcher resolves expiry on its own and
+    BOTH the GM and a seated player receive the ringing alarm — with no
+    action sent by anyone."""
+    with gm_session(ns) as gm:
+        do(gm, "pc_add", name="Vex")
+        state = do(gm, "timer_add", kind="alarm", label="boom", duration_s=2)
+        tid = state["timers"][0]["timer_id"]
+        do(gm, "timer_start", timer_id=tid)
+        with player_session(ns, "dev-1", name="Sam") as pws:
+            pws.recv()  # pending
+            gm.recv()   # knock
+            gm.send(type="action", action="approve_join", args={"device_token": "dev-1", "pc_id": state["party"][0]["pc_id"]})
+            pws.recv()  # seated
+            gm.recv()   # approval broadcast
+
+            def wait_for_alarm(sock):
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    msg = sock.recv(timeout=10)
+                    if msg["type"] == "state" and any(
+                        a["timer_id"] == tid for a in (msg["state"].get("alarm") or [])
+                    ):
+                        return True
+                return False
+
+            assert wait_for_alarm(gm)
+            assert wait_for_alarm(pws)

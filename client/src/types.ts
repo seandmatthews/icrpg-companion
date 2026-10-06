@@ -89,7 +89,7 @@ export interface ActiveView {
   bindings?: Record<string, { pc_id: string }>;
   log?: LogEntry[];
   milestones?: Milestone[];
-  alarm: { timer_id: string; label: string } | null;
+  alarm: { timer_id: string; label: string }[] | null;
   you?: { pc_id: string };
   status?: undefined;
 }
