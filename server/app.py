@@ -52,7 +52,7 @@ def detect_lan_ip() -> str | None:
 def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
     if fresh:
         st.clear_snapshot(data_dir)
-    state = st.load_snapshot(data_dir)
+    state, load_reason = st.load_snapshot(data_dir)
     if state is None:
         state = st.new_state(st.gen_room_code(), secrets.token_urlsafe(12))
     room = Room(state, data_dir)
@@ -65,6 +65,7 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, title="table-companion")
     app.state_model = state  # for run.py banner + tests
+    app.load_reason = load_reason  # snapshot fallback disclosure for the banner
 
     @app.get("/api/bootstrap")
     async def bootstrap() -> JSONResponse:

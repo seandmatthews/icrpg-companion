@@ -56,7 +56,7 @@ def new_state(room_code: str, gm_token: str, session_id: str | None = None) -> d
         # device_token -> {"pc_id": ...}
         "bindings": {},
         "log": [],  # {ts, audience: "all"|"gm", actor, text}
-        "milestones": [],  # {pc_id, reason, ts}
+        "milestones": [],  # {pc_id, pc_name, reason, ts}
         "alarm": None,  # {"timer_id": ...} while an expired timer is ringing
     }
 
@@ -246,28 +246,185 @@ def save_snapshot(state: dict, data_dir: str) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())  # power loss must not leave a 0-byte snapshot
+    if os.path.exists(path):
+        try:
+            # keep one fsynced previous generation; the .bak is a second
+            # belt, never a failure
+            with open(path, "rb") as src, open(path + ".bak", "wb") as dst:
+                dst.write(src.read())
+                dst.flush()
+                os.fsync(dst.fileno())
+        except OSError:
+            pass
     os.replace(tmp, path)
 
 
-def load_snapshot(data_dir: str) -> dict | None:
-    path = snapshot_path(data_dir)
+# canonical key-sets for snapshot entries: keys outside `allowed` are fossils
+# from an older build and are stripped on load; an entry missing any `required`
+# key is dropped entirely (with a note) — those are the keys downstream code
+# indexes directly, so a snapshot missing them must never KeyError the server
+_ENTRY_SHAPE = {
+    "party": (
+        {"pc_id", "name", "player_label", "hearts_max", "hearts", "inventory"},
+        {"pc_id", "name", "player_label", "hearts_max", "hearts"},
+    ),
+    "npcs": (
+        {"npc_id", "name", "hearts_max", "hearts", "effort_die", "abilities", "visible"},
+        {"npc_id", "name", "hearts_max", "hearts", "visible"},
+    ),
+    "loot": (
+        {"item_id", "name", "tier", "bonus", "description", "claimed_by"},
+        {"item_id", "name", "claimed_by"},
+    ),
+    "timers": (
+        {
+            "timer_id", "label", "kind", "duration_s", "rounds_total",
+            "rounds_left", "started_at", "elapsed_before_pause", "status",
+        },
+        {
+            "timer_id", "label", "kind", "duration_s", "rounds_total",
+            "rounds_left", "started_at", "elapsed_before_pause", "status",
+        },
+    ),
+    "join_requests": ({"device_token", "name"}, {"device_token", "name"}),
+    "milestones": ({"pc_id", "pc_name", "reason", "ts"}, {"pc_id"}),
+}
+_LOG_ALLOWED = {"ts", "audience", "actor", "text"}
+_LOG_REQUIRED = {"ts", "audience", "actor", "text"}
+
+
+def _clean_entries(entries: list, allowed: set, required: set) -> tuple[list, int]:
+    out, dropped = [], 0
+    for e in entries:
+        if not isinstance(e, dict) or not required.issubset(e.keys()):
+            dropped += 1
+            continue
+        out.append({k: v for k, v in e.items() if k in allowed})
+    return out, dropped
+
+
+def _normalize_state(raw: dict) -> tuple[dict, list[str]]:
+    """Rebuild a snapshot against the current new_state() template: backfill
+    missing keys, mint identity when it is gone, strip fossil keys (top level
+    and per-entry), and drop entries missing required keys — an older or
+    torn-but-valid snapshot must never KeyError the server later.
+    Returns (state, notes) where notes are the human-readable repairs for
+    the banner."""
+    notes: list[str] = []
+    room_code = raw.get("room_code")
+    if not isinstance(room_code, str) or not room_code:
+        room_code = gen_room_code()
+        notes.append("room code was missing — minted a new one")
+    gm_token = raw.get("gm_token")
+    if not isinstance(gm_token, str) or not gm_token:
+        gm_token = secrets.token_urlsafe(12)
+        notes.append("GM key was missing — minted a new one (printed above)")
+    session_id = raw.get("session_id")
+    if "session_id" in raw and not isinstance(session_id, str):
+        notes.append("session id was malformed — regenerated")
+        session_id = None
+    state = new_state(room_code, gm_token, session_id)
+
+    if isinstance(raw.get("title"), str) and raw["title"]:
+        state["title"] = raw["title"]
+    elif "title" in raw:
+        notes.append("title was malformed — reset to the default")
+    version = raw.get("version")
+    if isinstance(version, int) and not isinstance(version, bool):
+        state["version"] = version
+    created = raw.get("created")
+    if isinstance(created, str):
+        state["created"] = created
+
+    for key, want in (("targets", dict), ("alarm", (dict, type(None)))):
+        val = raw.get(key)
+        if isinstance(val, want):
+            state[key] = val
+        elif key in raw:
+            notes.append(f"{key} had the wrong type — reset")
+
+    for key, (allowed, required) in _ENTRY_SHAPE.items():
+        val = raw.get(key)
+        if isinstance(val, list):
+            cleaned, dropped = _clean_entries(val, allowed, required)
+            state[key] = cleaned
+            if dropped:
+                notes.append(f"{key}: {dropped} invalid entr{'y' if dropped == 1 else 'ies'} dropped")
+        elif key in raw:
+            notes.append(f"{key} had the wrong type — reset")
+    log = raw.get("log")
+    if isinstance(log, list):
+        cleaned, dropped = _clean_entries(log, _LOG_ALLOWED, _LOG_REQUIRED)
+        state["log"] = cleaned
+        if dropped:
+            notes.append(f"log: {dropped} invalid entries dropped")
+    elif "log" in raw:
+        notes.append("log had the wrong type — reset")
+
+    bindings = raw.get("bindings")
+    if isinstance(bindings, dict):
+        state["bindings"] = {
+            str(k): {"pc_id": v["pc_id"]}
+            for k, v in bindings.items()
+            if isinstance(v, dict) and isinstance(v.get("pc_id"), str)
+        }
+    elif "bindings" in raw:
+        notes.append("bindings had the wrong type — reset")
+
+    return state, notes
+
+
+def _read_snapshot_file(path: str) -> tuple[dict | None, str | None]:
+    """Returns (raw, None) on success, (None, reason) when damaged, and
+    (None, None) when the file simply does not exist."""
     if not os.path.exists(path):
-        return None
+        return None, None
     try:
-        with open(path, encoding="utf-8") as f:
-            state = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        # a torn snapshot must never keep the table from starting
-        return None
-    if not isinstance(state, dict) or state.get("schema") != SCHEMA:
-        return None
-    return state
+        with open(path, encoding="utf-8-sig") as f:  # -sig: Notepad loves BOMs
+            raw = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        return None, f"unreadable ({type(e).__name__})"
+    if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
+        return None, f"is not a {SCHEMA} snapshot"
+    return raw, None
+
+
+def load_snapshot(data_dir: str) -> tuple[dict | None, str | None]:
+    """Load and normalize the session snapshot.
+
+    Returns (state, reason): (state, None) on a clean load; (None, None)
+    when no snapshot exists — a normal fresh start, nothing to disclose;
+    (state/reason, ...) otherwise. The reason is always disclosed on the
+    banner, never silent. A missing or damaged main snapshot falls back to
+    the .bak copy of the previous save before giving up.
+    """
+    path = snapshot_path(data_dir)
+    raw, err = _read_snapshot_file(path)
+    if raw is None:
+        bak_raw, _ = _read_snapshot_file(path + ".bak")
+        if bak_raw is not None:
+            state, notes = _normalize_state(bak_raw)
+            cause = "was missing" if err is None else err
+            reason = f"snapshot {cause} — restored the previous session from the backup copy"
+            if notes:
+                reason += "; " + "; ".join(notes)
+            return state, reason
+        if err is None:
+            return None, None  # absent: a normal fresh start, nothing to disclose
+        return None, f"snapshot {err} — starting a fresh session"
+    state, notes = _normalize_state(raw)
+    return state, ("; ".join(notes) if notes else None)
 
 
 def clear_snapshot(data_dir: str) -> None:
-    path = snapshot_path(data_dir)
-    if os.path.exists(path):
-        os.remove(path)
+    # .bak goes before main: a crash mid-clear must never leave only the old
+    # generation behind to resurrect a "deleted" session
+    for suffix in (".tmp", ".bak", ""):
+        p = snapshot_path(data_dir) + suffix
+        if os.path.exists(p):
+            os.remove(p)
 
 
 def sanitize_name(s: str, cap: int = 60) -> str:
