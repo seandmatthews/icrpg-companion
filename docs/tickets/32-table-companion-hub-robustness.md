@@ -59,3 +59,12 @@
 - [ ] `pc_update {name, hearts_max: 99}` rejection leaves `name`
       uncommitted and unbroadcast (state-diff test).
 - [ ] A pack missing `name` → readable ActionError, no partial apply.
+
+## Related
+
+The 2026-10-06 full review split this ticket's scope: the *crash*
+class stays here; the *silent-corruption* wrong-typed args (null →
+`"None"`, string abilities, bool-as-int, truthy flags) moved to
+ticket 36, and pack validation beyond the missing-key KeyError (tier,
+sanitize, BOM) to ticket 48. Land 36's central field helpers as part
+of this ticket's coercion proposal where they overlap.
