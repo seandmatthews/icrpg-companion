@@ -1,6 +1,6 @@
 # 36 — action arg intake: the silent corruption class
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P2
 **Area:** `server/actions.py` (update handlers, `npc_add`/`npc_update`
 abilities, boolean flags), extends ticket 32's central-coercion proposal
@@ -75,3 +75,38 @@ Central field helpers used by add *and* update handlers (per ticket
 - [ ] `tests/test_actions.py::test_non_string_names_rejected` —
       `pc_add {name: {"x": 1}}` and `{name: ["a"]}` raise ActionError
       (no `{'x': 1}` in `state["party"]`).
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/actions.py` (central helpers `_need_str` / `_opt_str` /
+`_opt_int` / `_int_arg` / `_opt_bool` / `_abilities`; every add + update
+handler rewired) and `tests/test_actions.py` (five new tests):
+
+- Null policy is uniform: absent → "no change" in updates; explicit null →
+  ActionError; non-string/bool/non-int → ActionError. `str(None)` can no
+  longer plant "None" in any committed field; `isinstance(True, int)` holes
+  are closed for pc/timer hearts+duration+rounds and npc hearts (number).
+- Disclosure flags are strict booleans: `visible`/`share` accept only true/
+  false — `npc_reveal {visible: "false"}` and `log_note {share: "false"}`
+  now REJECT outright (see deviation below), so a hostile frame can neither
+  reveal an NPC nor publish a GM note.
+- Abilities require a list of strings; null abilities raise instead of the
+  old TypeError (loud → still loud, and now an ActionError with a safe
+  message) — and never silently clear the list (round-1 review caught that
+  collapse; fixed).
+- Named deviations (per CONVENTIONS):
+  (a) the AC's `test_abilities_must_be_list` landed as
+  `test_abilities_must_be_list_of_strings`;
+  (b) the log_note AC wording said a truthy-string `share` "produces an
+  audience-gm entry" — the chosen implementation rejects the frame outright
+  (strictly safer: nothing is logged from a malformed disclosure flag), and
+  the test pins that;
+  (c) `timer_update`'s string-int coercion (`duration_s: "12"`) was removed
+  as part of the `_opt_int` swap — this pre-completes the coercion half of
+  ticket 42's item 4; ticket 42 keeps the alarm-clearing and kind-mismatch
+  items.
+- Out-of-scope same-class sites noted for ticket 32's central coercion:
+  hearts `delta` bool→1.0, `milestone_delete {index: true}`, string-ints in
+  `set_targets`/`milestone_delete`. None reachable from the shipped client.
+- Gates: `python -m pytest` — 61 passed; `npm run build` green (client
+  untouched; all GMView/PlayerView send-sites verified compatible).

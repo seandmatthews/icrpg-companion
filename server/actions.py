@@ -27,6 +27,69 @@ def _need(args: dict, key: str) -> object:
     return v
 
 
+def _need_str(args: dict, key: str) -> str:
+    """A required field that must genuinely be a string — str() of a dict or
+    number would render Python repr into table-visible text."""
+    v = _need(args, key)
+    if not isinstance(v, str):
+        raise ActionError(f"'{key}' must be a string")
+    return v
+
+
+def _opt_str(args: dict, key: str) -> str | None:
+    """Optional string field for update handlers: absent → None (no change);
+    null or non-string → ActionError. str(None) must never become the literal
+    "None" in committed state (ticket 36)."""
+    if key not in args:
+        return None
+    v = args[key]
+    if v is None:
+        raise ActionError(f"'{key}' cannot be null")
+    if not isinstance(v, str):
+        raise ActionError(f"'{key}' must be a string")
+    return v
+
+
+def _opt_int(args: dict, key: str) -> int | None:
+    """Optional integer field: absent → None; null, bool, or non-int →
+    ActionError. isinstance(True, int) is True in Python, so bools must be
+    rejected explicitly or `hearts_max: true` lands in state (ticket 36)."""
+    if key not in args:
+        return None
+    v = args[key]
+    if v is None:
+        raise ActionError(f"'{key}' cannot be null")
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ActionError(f"'{key}' must be an integer")
+    return v
+
+
+def _int_arg(args: dict, key: str, default: int) -> int:
+    """Integer for add handlers with a default; still rejects null/bool."""
+    v = _opt_int(args, key)
+    return default if v is None else v
+
+
+def _opt_bool(args: dict, key: str, default: bool) -> bool:
+    """Disclosure flags are strict booleans — bool("false") is True, so a
+    truthy string must never flip visibility/audience (ticket 36)."""
+    v = args.get(key, default)
+    if not isinstance(v, bool):
+        raise ActionError(f"'{key}' must be true or false")
+    return v
+
+
+def _abilities(args: dict, key: str = "abilities") -> list[str]:
+    if key not in args:
+        return []
+    val = args[key]
+    if val is None:
+        raise ActionError(f"'{key}' cannot be null")
+    if not isinstance(val, list) or not all(isinstance(a, str) for a in val):
+        raise ActionError(f"'{key}' must be a list of strings")
+    return [st.sanitize_name(a, 60) for a in val if a.strip()][:6]
+
+
 def _need_timer(state: dict, args: dict) -> dict:
     t = st.find_timer(state, str(_need(args, "timer_id")))
     if t is None:
@@ -76,7 +139,7 @@ def _require_unbound(state: dict, pc_id: str) -> None:
 
 def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
     if action == "set_title":
-        state["title"] = st.sanitize_name(str(_need(args, "title")), 80)
+        state["title"] = st.sanitize_name(_need_str(args, "title"), 80)
 
     elif action == "set_targets":
         d = int(_need(args, "default"))
@@ -89,25 +152,26 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         kind = _need(args, "kind")
         if kind not in ("alarm", "rounds"):
             raise ActionError("timer kind must be alarm or rounds")
-        label = st.sanitize_name(str(_need(args, "label")), 60)
-        duration = args.get("duration_s")
-        rounds = args.get("rounds")
+        label = st.sanitize_name(_need_str(args, "label"), 60)
+        duration = _opt_int(args, "duration_s")
+        rounds = _opt_int(args, "rounds")
         if kind == "alarm":
-            if not isinstance(duration, int) or not (1 <= duration <= 24 * 3600):
+            if duration is None or not (1 <= duration <= 24 * 3600):
                 raise ActionError("alarm needs duration_s (1..86400)")
             rounds = None
         else:
-            if not isinstance(rounds, int) or not (1 <= rounds <= 99):
+            if rounds is None or not (1 <= rounds <= 99):
                 raise ActionError("rounds timer needs rounds (1..99)")
             duration = None
         state["timers"].append(st.new_timer(label, kind, duration, rounds))
 
     elif action == "timer_update":
         t = _need_timer(state, args)
-        if "label" in args:
-            t["label"] = st.sanitize_name(str(args["label"]), 60)
-        if "duration_s" in args and t["kind"] == "alarm":
-            d = int(args["duration_s"])
+        label = _opt_str(args, "label")
+        if label is not None:
+            t["label"] = st.sanitize_name(label, 60)
+        d = _opt_int(args, "duration_s")
+        if d is not None and t["kind"] == "alarm":
             if not (1 <= d <= 24 * 3600):
                 raise ActionError("duration_s must be 1..86400")
             t["duration_s"] = d
@@ -115,8 +179,8 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
                 t["status"] = "idle"
                 t["started_at"] = None
                 t["elapsed_before_pause"] = 0.0
-        if "rounds" in args and t["kind"] == "rounds":
-            r = int(args["rounds"])
+        r = _opt_int(args, "rounds")
+        if r is not None and t["kind"] == "rounds":
             if not (1 <= r <= 99):
                 raise ActionError("rounds must be 1..99")
             t["rounds_total"] = r
@@ -174,24 +238,27 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["alarm"] = None
 
     elif action == "pc_add":
-        name = st.sanitize_name(str(_need(args, "name")), 40)
+        name = st.sanitize_name(_need_str(args, "name"), 40)
         if not name:
             raise ActionError("pc needs a name")
-        hearts = args.get("hearts_max", 3)
-        if not isinstance(hearts, int) or not (1 <= hearts <= 20):
+        hearts = _int_arg(args, "hearts_max", 3)
+        if not (1 <= hearts <= 20):
             raise ActionError("hearts_max must be 1..20")
+        player_label = _opt_str(args, "player_label")
         state["party"].append(
-            st.new_pc(name, st.sanitize_name(str(args.get("player_label", "")), 40), hearts)
+            st.new_pc(name, st.sanitize_name(player_label or "", 40), hearts)
         )
 
     elif action == "pc_update":
         pc = _need_pc(state, args)
-        if "name" in args:
-            pc["name"] = st.sanitize_name(str(args["name"]), 40) or pc["name"]
-        if "player_label" in args:
-            pc["player_label"] = st.sanitize_name(str(args["player_label"]), 40)
-        if "hearts_max" in args:
-            hm = int(args["hearts_max"])
+        name = _opt_str(args, "name")
+        if name is not None:
+            pc["name"] = st.sanitize_name(name, 40) or pc["name"]
+        player_label = _opt_str(args, "player_label")
+        if player_label is not None:
+            pc["player_label"] = st.sanitize_name(player_label, 40)
+        hm = _opt_int(args, "hearts_max")
+        if hm is not None:
             if not (1 <= hm <= 20):
                 raise ActionError("hearts_max must be 1..20")
             pc["hearts_max"] = hm
@@ -210,24 +277,30 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         pc["hearts"] = _shift_hearts(pc["hearts"], pc["hearts_max"], float(_need(args, "delta")))
 
     elif action == "npc_add":
-        name = st.sanitize_name(str(_need(args, "name")), 40)
+        name = st.sanitize_name(_need_str(args, "name"), 40)
         if not name:
             raise ActionError("npc needs a name")
-        hearts = float(args.get("hearts_max", 1))
+        hearts = args.get("hearts_max", 1)
+        if isinstance(hearts, bool) or not isinstance(hearts, (int, float)):
+            raise ActionError("'hearts_max' must be a number")
+        hearts = float(hearts)
         if not (0.5 <= hearts <= 40):
             raise ActionError("hearts_max must be 0.5..40")
         die = str(args.get("effort_die", "d6"))
         if die not in EFFORT_DICE:
             raise ActionError("effort_die must be one of " + ", ".join(EFFORT_DICE))
-        abilities = [st.sanitize_name(str(a), 60) for a in args.get("abilities", []) if str(a).strip()][:6]
-        state["npcs"].append(st.new_npc(name, hearts, die, abilities, bool(args.get("visible", False))))
+        state["npcs"].append(st.new_npc(name, hearts, die, _abilities(args), _opt_bool(args, "visible", False)))
 
     elif action == "npc_update":
         npc = _need_npc(state, args)
-        if "name" in args:
-            npc["name"] = st.sanitize_name(str(args["name"]), 40) or npc["name"]
+        name = _opt_str(args, "name")
+        if name is not None:
+            npc["name"] = st.sanitize_name(name, 40) or npc["name"]
         if "hearts_max" in args:
-            hm = float(args["hearts_max"])
+            hearts = args["hearts_max"]
+            if isinstance(hearts, bool) or not isinstance(hearts, (int, float)):
+                raise ActionError("'hearts_max' must be a number")
+            hm = float(hearts)
             if not (0.5 <= hm <= 40):
                 raise ActionError("hearts_max must be 0.5..40")
             npc["hearts_max"] = hm
@@ -237,7 +310,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
                 raise ActionError("bad effort_die")
             npc["effort_die"] = args["effort_die"]
         if "abilities" in args:
-            npc["abilities"] = [st.sanitize_name(str(a), 60) for a in args["abilities"] if str(a).strip()][:6]
+            npc["abilities"] = _abilities(args)
 
     elif action == "npc_delete":
         nid = str(_need(args, "npc_id"))
@@ -245,7 +318,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
 
     elif action == "npc_reveal":
         npc = _need_npc(state, args)
-        npc["visible"] = bool(args.get("visible", True))
+        npc["visible"] = _opt_bool(args, "visible", True)
         st.add_log(
             state, actor, f"{npc['name']} {'takes the stage' if npc['visible'] else 'steps back into the shadows'}"
         )
@@ -255,7 +328,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         npc["hearts"] = _shift_hearts(npc["hearts"], npc["hearts_max"], float(_need(args, "delta")))
 
     elif action == "loot_add":
-        name = st.sanitize_name(str(_need(args, "name")), 60)
+        name = st.sanitize_name(_need_str(args, "name"), 60)
         if not name:
             raise ActionError("item needs a name")
         tier = str(args.get("tier", "common"))
@@ -265,23 +338,26 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
             st.new_item(
                 name,
                 tier,
-                st.sanitize_name(str(args.get("bonus", "")), 60),
-                st.sanitize_name(str(args.get("description", "")), 200),
+                st.sanitize_name(_opt_str(args, "bonus") or "", 60),
+                st.sanitize_name(_opt_str(args, "description") or "", 200),
             )
         )
 
     elif action == "loot_update":
         item = _need_item(state, args)
-        if "name" in args:
-            item["name"] = st.sanitize_name(str(args["name"]), 60) or item["name"]
+        name = _opt_str(args, "name")
+        if name is not None:
+            item["name"] = st.sanitize_name(name, 60) or item["name"]
         if "tier" in args:
             if args["tier"] not in TIERS:
                 raise ActionError("bad tier")
             item["tier"] = args["tier"]
-        if "bonus" in args:
-            item["bonus"] = st.sanitize_name(str(args["bonus"]), 60)
-        if "description" in args:
-            item["description"] = st.sanitize_name(str(args["description"]), 200)
+        bonus = _opt_str(args, "bonus")
+        if bonus is not None:
+            item["bonus"] = st.sanitize_name(bonus, 60)
+        description = _opt_str(args, "description")
+        if description is not None:
+            item["description"] = st.sanitize_name(description, 200)
 
     elif action == "loot_delete":
         iid = str(_need(args, "item_id"))
@@ -321,7 +397,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
 
     elif action == "milestone_add":
         pc = _need_pc(state, args)
-        reason = st.sanitize_name(str(_need(args, "reason")), 140)
+        reason = st.sanitize_name(_need_str(args, "reason"), 140)
         state["milestones"].append({"pc_id": pc["pc_id"], "pc_name": pc["name"], "reason": reason, "ts": st.now_iso()})
         st.add_log(state, actor, f"{pc['name']} earned a milestone — {reason}")
 
@@ -332,8 +408,8 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         state["milestones"].pop(idx)
 
     elif action == "log_note":
-        text = st.sanitize_name(str(_need(args, "text")), 200)
-        audience = "all" if args.get("share", False) else "gm"
+        text = st.sanitize_name(_need_str(args, "text"), 200)
+        audience = "all" if _opt_bool(args, "share", False) else "gm"
         st.add_log(state, actor, text, audience=audience)
 
     elif action == "starter_load":
