@@ -261,3 +261,96 @@ def test_log_is_capped(fresh_state):
     for i in range(st.LOG_CAP + 50):
         st.add_log(fresh_state, "t", f"e{i}")
     assert len(fresh_state["log"]) == st.LOG_CAP
+
+
+# -- arg intake honesty (ticket 36) ------------------------------------------
+
+
+def test_update_null_fields_rejected(seated_state):
+    pc = seated_state["party"][0]
+    with pytest.raises(ActionError, match="cannot be null"):
+        act(seated_state, "pc_update", {"pc_id": pc["pc_id"], "name": None})
+    assert pc["name"] == "Vex"
+    with pytest.raises(ActionError, match="cannot be null"):
+        act(seated_state, "pc_update", {"pc_id": pc["pc_id"], "hearts_max": None})
+    assert pc["hearts_max"] == 3
+    npc = seated_state["npcs"][0]
+    with pytest.raises(ActionError, match="cannot be null"):
+        act(seated_state, "npc_update", {"npc_id": npc["npc_id"], "name": None})
+    assert npc["name"] == "Sergeant Orla"
+    item = seated_state["loot"][0]
+    with pytest.raises(ActionError, match="cannot be null"):
+        act(seated_state, "loot_update", {"item_id": item["item_id"], "bonus": None})
+    assert item["bonus"] == ""
+    act(seated_state, "timer_add", {"kind": "alarm", "label": "t", "duration_s": 60})
+    timer = seated_state["timers"][0]
+    with pytest.raises(ActionError, match="cannot be null"):
+        act(seated_state, "timer_update", {"timer_id": timer["timer_id"], "label": None})
+    assert timer["label"] == "t"
+
+
+def test_abilities_must_be_list_of_strings(seated_state):
+    with pytest.raises(ActionError, match="list of strings"):
+        act(seated_state, "npc_add", {"name": "Orc", "abilities": "sword"})
+    assert all(n["name"] != "Orc" for n in seated_state["npcs"])
+    with pytest.raises(ActionError, match="list of strings"):
+        act(seated_state, "npc_add", {"name": "Orc", "abilities": ["sword", 5]})
+    npc = seated_state["npcs"][0]
+    with pytest.raises(ActionError, match="list of strings"):
+        act(seated_state, "npc_update", {"npc_id": npc["npc_id"], "abilities": "sword"})
+    assert npc["abilities"] == []
+    # null must never silently clear the list — same policy as every field
+    with pytest.raises(ActionError, match="cannot be null"):
+        act(seated_state, "npc_update", {"npc_id": npc["npc_id"], "abilities": None})
+    assert npc["abilities"] == []
+
+
+def test_bool_rejected_as_int(seated_state):
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(seated_state, "pc_add", {"name": "Bool", "hearts_max": True})
+    assert all(p["name"] != "Bool" for p in seated_state["party"])
+    act(seated_state, "pc_add", {"name": "Real"})  # absent → default still applies
+    assert seated_state["party"][1]["hearts_max"] == 3
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(seated_state, "timer_add", {"kind": "alarm", "label": "t", "duration_s": True})
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(seated_state, "timer_add", {"kind": "rounds", "label": "t", "rounds": False})
+    with pytest.raises(ActionError, match="must be a number"):
+        act(seated_state, "npc_add", {"name": "BoolNpc", "hearts_max": True})
+    pc = seated_state["party"][0]
+    with pytest.raises(ActionError, match="must be an integer"):
+        act(seated_state, "pc_update", {"pc_id": pc["pc_id"], "hearts_max": True})
+    assert pc["hearts_max"] == 3
+
+
+def test_flag_strings_do_not_flip_disclosure(seated_state):
+    npc = seated_state["npcs"][0]
+    with pytest.raises(ActionError, match="must be true or false"):
+        act(seated_state, "npc_reveal", {"npc_id": npc["npc_id"], "visible": "false"})
+    assert npc["visible"] is False
+    act(seated_state, "npc_reveal", {"npc_id": npc["npc_id"], "visible": True})
+    assert npc["visible"] is True
+    act(seated_state, "npc_reveal", {"npc_id": npc["npc_id"]})  # absent → default
+    assert npc["visible"] is True
+    # the chosen policy is strict: a truthy string is rejected outright, so
+    # no log entry exists that could ever have leaked to the players
+    log_len = len(seated_state["log"])
+    with pytest.raises(ActionError, match="must be true or false"):
+        act(seated_state, "log_note", {"text": "private", "share": "false"})
+    assert len(seated_state["log"]) == log_len
+    act(seated_state, "log_note", {"text": "public", "share": True})
+    assert seated_state["log"][-1]["audience"] == "all"
+    act(seated_state, "log_note", {"text": "default"})
+    assert seated_state["log"][-1]["audience"] == "gm"
+
+
+def test_non_string_names_rejected(seated_state):
+    with pytest.raises(ActionError, match="must be a string"):
+        act(seated_state, "pc_add", {"name": {"x": 1}})
+    with pytest.raises(ActionError, match="must be a string"):
+        act(seated_state, "pc_add", {"name": ["a"]})
+    with pytest.raises(ActionError, match="must be a string"):
+        act(seated_state, "log_note", {"text": 5})
+    with pytest.raises(ActionError, match="must be a string"):
+        act(seated_state, "set_title", {"title": 12})
+    assert seated_state["title"] == "Untitled session"
