@@ -24,8 +24,10 @@ def write_png(path: str, size: int, rows: list[list[tuple[int, int, int]]]) -> N
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
     ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
     png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
-    with open(path, "wb") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
         f.write(png)
+    os.replace(tmp, path)  # atomic: an interrupted run leaves no truncated "committed" icon
 
 
 def inside_heart(x: float, y: float) -> bool:

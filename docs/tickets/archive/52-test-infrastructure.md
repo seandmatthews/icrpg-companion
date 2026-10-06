@@ -56,24 +56,58 @@ greens:
 
 ## Acceptance criteria
 
-- [ ] The harness itself is pinned: a deliberately failing test
+- [x] The harness itself is pinned: a deliberately failing test
       (marked/parametrized, or a local run note) leaves no live
       server thread — asserted via a module-level registry of booted
       servers checked in a session finalizer (`test_ws_flow.py::
       test_no_leaked_servers_after_failure`).
-- [ ] `shutdown()` fails loudly: a monkeypatched never-dying server
+- [x] `shutdown()` fails loudly: a monkeypatched never-dying server
       thread makes `shutdown()` raise instead of returning silently.
-- [ ] `tests/test_ws_flow.py::test_rejoin...` (amended) — after the
+- [x] `tests/test_ws_flow.py::test_rejoin...` (amended) — after the
       re-hello, the GM's next frame shows `join_requests == []`
       (today: not checked).
-- [ ] `tests/test_actions.py::test_player_return_other_pc_item_rejected`
+- [x] `tests/test_actions.py::test_player_return_other_pc_item_rejected`
       — the ownership wall asserted through a real player action, not
       the else-branch; the `test_player_cannot_call_gm_actions` names
       updated to what they actually pin.
-- [ ] `tests/test_ws_flow.py::test_gm_token_absent_from_ws_frames` —
+- [x] `tests/test_ws_flow.py::test_gm_token_absent_from_ws_frames` —
       every role's first state frame lacks `gm_token` (today: only
       bootstrap is checked).
-- [ ] Wrong-key test asserts the server closes with 4001 (recv
+- [x] Wrong-key test asserts the server closes with 4001 (recv
       raises/close code observed), not just the error frame.
-- [ ] `make_icons.py` uses tmp + `os.replace`; `import socket` gone;
+- [x] `make_icons.py` uses tmp + `os.replace`; `import socket` gone;
       full suite green with no new warnings.
+
+## Implementation notes (2026-10-06)
+
+Landed across `tests/test_ws_flow.py` (rewritten harness), 
+`tests/test_actions.py`, and `scripts/make_icons.py`:
+
+- Harness: `TestServer` context manager — `close()` joins and RAISES if the
+  thread survives 5s; boot failure stops the late-binding thread before
+  raising. Every booted server registers in `TestServer.LIVE`; the leak pin
+  is a session-autouse fixture `_no_leaked_servers` asserting nothing alive
+  remains at session end. `WS` is context-managed and every test uses `with`.
+- Named deviations from the ticket (per CONVENTIONS):
+  (a) the leak pin landed as the `_no_leaked_servers` session fixture, not
+  a test named `test_no_leaked_servers_after_failure` — functionally
+  stronger (it cannot be skipped by an earlier failing assert);
+  (b) "names updated to what they actually pin" was satisfied with a
+  correcting comment on `test_player_can_shift_own_hearts_only` plus the
+  new real-ownership test, rather than renaming
+  `test_player_cannot_call_gm_actions` (whose name is accurate as-is).
+- False greens fixed: rejoin test now probes the GM view via a `log_note`
+  broadcast and asserts the knock panel stays empty; ownership wall pinned
+  by `test_player_return_other_pc_item_rejected` (claim survives the
+  rejected return); `gm_token` absence asserted for GM, seated, AND pending
+  first frames; wrong-key and wrong-room now assert the actual close codes
+  (4001/4002) via `_assert_closed_with`, which cannot false-pass (timeout or
+  missing close frame both fail loudly).
+- `test_close_raises_when_the_server_thread_stalls` pins the loud-shutdown
+  contract without booting uvicorn (~5s cost: close() must exhaust its join
+  before raising — accepted).
+- `make_icons.py` now writes tmp + `os.replace`; committed PNG bytes
+  unchanged.
+- Two review rounds: first APPROVED with P3 nits, all addressed, second
+  confirmed clean with no findings.
+- Gates: `python -m pytest` — 42 passed, no warnings.
