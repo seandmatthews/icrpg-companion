@@ -20,6 +20,10 @@ def test_pc_hearts_clamp_to_bounds(seated_state):
 
 
 def test_player_can_shift_own_hearts_only(seated_state):
+    # the negative here is rejected by apply_action's role routing (a player
+    # calling a GM verb lands in _player_action's "unknown player action"
+    # else-branch); ownership walls for real player verbs are pinned by the
+    # claim/return tests and test_player_return_other_pc_item_rejected below
     pc = seated_state["party"][0]
     act(seated_state, "pc_add", {"name": "Brann"})
     brann = seated_state["party"][1]
@@ -27,6 +31,20 @@ def test_player_can_shift_own_hearts_only(seated_state):
     assert pc["hearts"] == pc["hearts_max"] - 1
     with pytest.raises(ActionError):
         act(seated_state, "pc_hearts", {"pc_id": brann["pc_id"], "delta": -1}, role="player", pc_id=pc["pc_id"])
+
+
+def test_player_return_other_pc_item_rejected(seated_state):
+    # the ownership wall through a real player verb: Brann's claim must not
+    # be returnable by Sam (the gate-table rejections in the test above pass
+    # via "unknown player action" and pin a different wall)
+    item = seated_state["loot"][0]
+    sam = seated_state["party"][0]
+    act(seated_state, "pc_add", {"name": "Brann"})
+    brann = seated_state["party"][1]
+    act(seated_state, "player_claim", {"item_id": item["item_id"]}, role="player", actor="Brann", pc_id=brann["pc_id"])
+    with pytest.raises(ActionError, match="not in your pack"):
+        act(seated_state, "player_return", {"item_id": item["item_id"]}, role="player", pc_id=sam["pc_id"])
+    assert item["claimed_by"] == brann["pc_id"]  # the claim survives the rejected return
 
 
 def test_npc_partial_hearts(seated_state):
