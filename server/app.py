@@ -172,8 +172,18 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
             pass
         finally:
             room._drop(conn)  # one guarded removal path everywhere (ticket 32)
-            # a pending player who left is a ghost knock — clear it for the GM
-            if conn.role == "pending" and conn.device_token and st.drop_join_request(room.state, conn.device_token):
+            # a pending player who left is a ghost knock — clear it for the GM,
+            # but only when no other live tab of the same device holds it
+            # (two tabs share one token and one knock — ticket 37)
+            if (
+                conn.role == "pending"
+                and conn.device_token
+                and not any(
+                    other.role != "gm" and other.device_token == conn.device_token
+                    for other in room.conns
+                )
+                and st.drop_join_request(room.state, conn.device_token)
+            ):
                 room.commit()
                 await room.broadcast_to_gms()
 

@@ -420,3 +420,93 @@ def test_stale_snapshot_knock_pruned_on_boot(tmp_path):
     with TestServer(str(tmp_path), fresh=False) as srv:
         # the knocking client is long gone — the ghost must not linger
         assert srv.app.state_model["join_requests"] == []
+
+
+# -- seat-removal join lifecycle (ticket 37) ----------------------------------
+
+
+def test_pc_delete_reknocks_connected_player(ns):
+    with gm_session(ns) as gm:
+        state = do(gm, "pc_add", name="Vex")
+        pc_id = state["party"][0]["pc_id"]
+        with player_session(ns, "dev-1", name="Sam") as pws:
+            pws.recv()  # pending
+            gm.recv()   # knock
+            gm.send(type="action", action="approve_join", args={"device_token": "dev-1", "pc_id": pc_id})
+            assert pws.recv()["state"]["you"]["pc_id"] == pc_id
+            gm.recv()   # approval broadcast
+
+            gv = do(gm, "pc_delete", pc_id=pc_id)
+            # the same broadcast flips the player to pending AND re-knocks them
+            assert pws.recv()["state"]["status"] == "pending"
+            assert any(r["device_token"] == "dev-1" for r in gv["join_requests"])
+
+            # the GM seats them again — no reload required
+            state2 = do(gm, "pc_add", name="Vex2")
+            assert pws.recv()["state"]["status"] == "pending"  # the pc_add broadcast
+            pc2 = state2["party"][0]["pc_id"]
+            gm.send(type="action", action="approve_join", args={"device_token": "dev-1", "pc_id": pc2})
+            assert pws.recv()["state"]["you"]["pc_id"] == pc2
+
+
+def test_session_reset_reknocks_players(ns):
+    with gm_session(ns) as gm:
+        state = do(gm, "pc_add", name="Vex")
+        pc_id = state["party"][0]["pc_id"]
+        with player_session(ns, "dev-1", name="Sam") as pws:
+            pws.recv()
+            gm.recv()
+            gm.send(type="action", action="approve_join", args={"device_token": "dev-1", "pc_id": pc_id})
+            pws.recv()
+            gm.recv()
+
+            gv = do(gm, "session_reset")
+            assert pws.recv()["state"]["status"] == "pending"
+            assert any(r["device_token"] == "dev-1" for r in gv["join_requests"])
+
+
+def test_closing_second_tab_keeps_knock(ns):
+    with gm_session(ns) as gm:
+        pws_a = player_session(ns, "dev-2", name="Ash")
+        assert pws_a.recv()["state"]["status"] == "pending"
+        gm.recv()  # the knock (one per device token)
+        pws_b = player_session(ns, "dev-2", name="Ash")
+        pws_b.recv()  # pending; duplicate hello creates no second knock
+
+        pws_b.close()
+        # the spare tab closed: the live player's knock must SURVIVE
+        gm_view = do(gm, "log_note", text="probe")
+        assert any(r["device_token"] == "dev-2" for r in gm_view["join_requests"])
+
+        pws_a.close()
+        gm.recv()  # the knock-removal broadcast
+        gm_view = do(gm, "log_note", text="probe2")
+        assert not any(r["device_token"] == "dev-2" for r in gm_view["join_requests"])
+
+
+def test_reject_after_reknock_still_sticks(ns):
+    with gm_session(ns) as gm:
+        state = do(gm, "pc_add", name="Vex")
+        pc_id = state["party"][0]["pc_id"]
+        with player_session(ns, "dev-9", name="Sam") as pws:
+            pws.recv()
+            gm.recv()
+            gm.send(type="action", action="approve_join", args={"device_token": "dev-9", "pc_id": pc_id})
+            pws.recv()
+            gm.recv()
+            gv = do(gm, "pc_delete", pc_id=pc_id)
+            assert pws.recv()["state"]["status"] == "pending"  # re-knocked
+            assert any(r["device_token"] == "dev-9" for r in gv["join_requests"])
+
+            gm.send(type="action", action="reject_join", args={"device_token": "dev-9"})
+            gm.recv()
+            refusal = pws.recv()
+            assert refusal["state"].get("rejected") is True
+            _assert_closed_with(pws, 4003)
+
+        # repeated delete/re-seat/reject cycles leave no ghost knocks
+        with player_session(ns, "dev-9", name="Sam") as pws2:
+            again = pws2.recv()
+            assert again["state"].get("rejected") is True
+            gm_view = do(gm, "log_note", text="probe")
+            assert gm_view["join_requests"] == []

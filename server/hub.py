@@ -53,9 +53,13 @@ class Room:
     def refresh_seats(self) -> None:
         """Re-derive every non-GM seat from state before sending.
 
-        This is why approve_join/pc_delete need no socket bookkeeping: the
-        binding write (or removal) takes effect on the next broadcast.
-        """
+        This is why approve_join needs no socket bookkeeping: the binding write
+        takes effect on the next broadcast. A DEMOTION (binding removed while
+        connected — pc_delete, session_reset) re-knocks the device so the GM's
+        panel can seat that player again instead of stranding them at
+        "Knock knock…" with an empty panel (ticket 37). Mutating: re-knocks are
+        batched into one commit per pass."""
+        knocked = False
         for conn in self.conns:
             if conn.role == "gm":
                 continue
@@ -63,7 +67,18 @@ class Room:
             if binding:
                 conn.role, conn.pc_id = "player", binding["pc_id"]
             elif conn.device_token:
+                if (
+                    conn.role == "player"
+                    and not st.is_rejected(self.state, conn.device_token)
+                    and not any(r["device_token"] == conn.device_token for r in self.state["join_requests"])
+                ):
+                    self.state["join_requests"].append(
+                        {"device_token": conn.device_token, "name": conn.name or "Player"}
+                    )
+                    knocked = True
                 conn.role, conn.pc_id = "pending", None
+        if knocked:
+            self.commit()
 
     async def send_to(self, conn: Connection) -> None:
         self.refresh_seats()
