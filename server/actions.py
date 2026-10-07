@@ -529,8 +529,12 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         st.add_log(state, actor, f"loaded starter content: {added}", audience="gm")
 
     elif action == "session_reset":
-        keep = (state["room_code"], state["gm_token"])
-        fresh = st.new_state(keep[0], keep[1])
+        # version must stay monotonic across a reset (ticket 43): the client
+        # staleness check (ticket 32's proposal) would otherwise see version
+        # collapse from e.g. 412 to 2. The room code is KEPT by ruling (see
+        # the ticket) — devices already hold the join URL.
+        fresh = st.new_state(state["room_code"], state["gm_token"])
+        fresh["version"] = state["version"]
         state.clear()
         state.update(fresh)
 

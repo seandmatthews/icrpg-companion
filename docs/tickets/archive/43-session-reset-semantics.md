@@ -1,6 +1,6 @@
 # 43 — session_reset semantics: version monotonicity, room code rotation
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06.
 **Priority:** P3
 **Area:** `server/actions.py` (session_reset), `server/state.py`
 (new_state), `server/hub.py` (commit)
@@ -48,3 +48,21 @@ knock gate (see ticket 38's ruling), which the GM sees and rejects.
       — amend the existing test to assert the code is kept explicitly
       (per the ruling) so the accepted residual risk is pinned, not
       accidental.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/actions.py` (session_reset) and `tests/test_actions.py`:
+
+- Reset carries the version counter (`fresh["version"] = state["version"]`);
+  the post-reset commit exceeds it, so version is strictly monotonic across a
+  reset — ticket 32's proposed client staleness check can never see a
+  collapse. Pinned by `test_version_monotonic_across_reset` (version bumps
+  live in Room.commit, so the state-layer test drives a realistic counter
+  directly).
+- Room code kept per the Ruling; `test_session_reset_keeps_room_identity`
+  now pins the carried version explicitly and documents the ruling (the old
+  `version == 1` assertion was pinning the collapse — the bug). Note: the AC
+  named the test `..._preserves_...`; the actual name is `..._keeps_...`
+  (pre-existing).
+- `--fresh` still mints version 1 (genuinely new room, no clients).
+- Gates: `python -m pytest` — 102 passed ×2.
