@@ -241,6 +241,15 @@ export function GMView({
   const loot = view.loot ?? [];
   const boundIds = new Set(Object.values(view.bindings ?? {}).map((b: { pc_id: string }) => b.pc_id));
   const seatable = party.filter((p) => !boundIds.has(p.pc_id));
+  // duplicate names get a numeral ("Gandalf 2") so the ambiguous dropdowns
+  // can't seat/credit the wrong twin (ticket 44 ruling)
+  const seen = new Map<string, number>();
+  const displayName = (p: { pc_id: string; name: string }) => {
+    const n = (seen.get(p.name) ?? 0) + 1;
+    seen.set(p.name, n);
+    return n === 1 ? p.name : `${p.name} ${n}`;
+  };
+  const displayNames = new Map(party.map((p) => [p.pc_id, displayName(p)]));
 
   // a failed/absent bootstrap falls back to this machine's address, which a
   // phone can't join — the modal discloses it instead of encoding it silently
@@ -301,7 +310,7 @@ export function GMView({
                 </option>
                 {seatable.map((p) => (
                   <option key={p.pc_id} value={p.pc_id}>
-                    {p.name}
+                    {displayNames.get(p.pc_id)}
                   </option>
                 ))}
               </select>
@@ -330,7 +339,7 @@ export function GMView({
                 </option>
                 {seatable.map((p) => (
                   <option key={p.pc_id} value={p.pc_id}>
-                    {p.name}
+                    {displayNames.get(p.pc_id)}
                   </option>
                 ))}
               </select>
@@ -476,7 +485,7 @@ export function GMView({
                           </option>
                           {party.map((p) => (
                             <option key={p.pc_id} value={p.pc_id}>
-                              {p.name}
+                              {displayNames.get(p.pc_id)}
                             </option>
                           ))}
                         </select>
