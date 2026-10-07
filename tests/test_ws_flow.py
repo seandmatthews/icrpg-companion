@@ -652,3 +652,24 @@ def test_alarm_rings_without_client_action(ns):
 
             assert wait_for_alarm(gm)
             assert wait_for_alarm(pws)
+
+
+def test_knock_names_normalize_nfd_nfc(ns):
+    # ticket 45's twin scenario: the same name in decomposed and composed
+    # form must knock as ONE name, via the real hello path
+    from server import state as st
+
+    nfc = "Café"
+    nfd = "Café"
+    assert nfc != nfd and st.sanitize_name(nfd) == st.sanitize_name(nfc)
+    with gm_session(ns) as gm:
+        with player_session(ns, "dev-nfd", name=nfd) as p1:
+            p1.recv()
+            gm.recv()  # knock 1
+            with player_session(ns, "dev-nfc", name=nfc) as p2:
+                p2.recv()
+                gm.recv()  # knock 2
+                gm_view = do(gm, "log_note", text="probe")
+                knocks = {r["device_token"]: r["name"] for r in gm_view["join_requests"]}
+                assert knocks["dev-nfd"] == st.sanitize_name(nfc)
+                assert knocks["dev-nfc"] == knocks["dev-nfd"]
