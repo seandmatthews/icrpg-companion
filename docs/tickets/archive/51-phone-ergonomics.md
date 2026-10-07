@@ -1,6 +1,6 @@
 # 51 — phone ergonomics of failure-critical surfaces
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds); manual click-throughs pending user verification.
 **Priority:** P3
 **Area:** `client/src/styles.css`, `client/src/components/Hearts.tsx`,
 `Timers.tsx`, `client/index.html`
@@ -57,3 +57,28 @@ gate:
 - [ ] Manual: a timer inside 30 s shows the hot styling on the GM
       console as well as the player list.
 - [ ] `npm run build` green.
+
+## Implementation notes (2026-10-06)
+
+Landed in `client/src/styles.css`, `components/Hearts.tsx`,
+`components/Timers.tsx`:
+
+- Safe areas: `.toast` sits above the home indicator (with a plain-1rem
+  fallback for env()-less browsers); `.player-view` padding and
+  `.player-footer` carry the insets; `.screen-center` is 100dvh with a 100vh
+  fallback line (a bare dvh swap would have dropped min-height on old
+  browsers — review round 1 caught it).
+- Hearts ladder (deviation from the AC's cell-strip phrasing, chosen within
+  the proposal's latitude): 1–9 full-size cells, 10–12 shrunken cells
+  (`.hearts-many`), 13+ a numeric readout — a 16-heart PC now reads
+  "12/16" at 2.3rem instead of an overflowing strip; fractions show the
+  decimal ("2.5/13"). Review round 1 caught the readout was `--paper`-on-
+  paper (invisible) — now `--ink`, 15:1 contrast, with the big size scoped
+  to the player's card so GM rows stay compact.
+- Touch targets: player-view `.btn-sm` (steppers, toss-back, claim) are 44px;
+  GM rows keep compact buttons.
+- TimerGM now carries the ≤30s `timer-hot` treatment (the person who must
+  react was the only one without it).
+- Dead `.hearts-overflow` CSS removed; comment drift on the thresholds fixed.
+- Gates: `python -m pytest` — 90 passed; `npm run build` green. Manual
+  click-through criteria left unticked pending user phone verification.
