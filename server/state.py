@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 SCHEMA = "table-companion/v0"
@@ -465,4 +466,9 @@ def clear_snapshot(data_dir: str) -> None:
 
 
 def sanitize_name(s: str, cap: int = 60) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()[:cap]
+    """Normalize to NFC (two renders of "Café" must be one name), drop
+    control/zero-width/bidi characters (they make names look identical or
+    reverse following text), then collapse whitespace (ticket 45)."""
+    s = "".join(c for c in (s or "") if unicodedata.category(c) not in ("Cc", "Cf"))
+    s = unicodedata.normalize("NFC", s)  # AFTER filtering: a Cf starter would block composition
+    return re.sub(r"\s+", " ", s).strip()[:cap]

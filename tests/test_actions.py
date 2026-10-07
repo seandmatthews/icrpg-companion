@@ -652,3 +652,35 @@ def test_rejected_loot_update_partial_apply(seated_state):
     with pytest.raises(ActionError, match="too long"):
         act(seated_state, "loot_update", {"item_id": item["item_id"], "name": "Arkenstone", "description": "x" * 201})
     assert item["name"] == "Ford signet ring"  # the rename did NOT ride along
+
+
+# -- name unicode normalization (ticket 45) -----------------------------------
+
+
+def test_nfd_and_nfc_names_normalized(seated_state):
+    from server import state as st
+
+    nfc = "Café"
+    nfd = "Café"  # e + combining acute
+    assert nfc != nfd  # different code points…
+    assert st.sanitize_name(nfd) == st.sanitize_name(nfc)  # …one name after
+    act(seated_state, "pc_add", {"name": nfd})
+    assert seated_state["party"][-1]["name"] == st.sanitize_name(nfc)
+
+
+def test_control_and_zero_width_stripped(seated_state):
+    from server import state as st
+    from unicodedata import category
+
+    hostile = "Vi\u200bsha\u202ebra"  # zero-width space + RTL override
+    name = st.sanitize_name(hostile)
+    assert name == "Vishabra"  # both invisible chars gone, nothing else changed
+    assert all(category(c) not in ("Cc", "Cf") for c in name)
+    act(seated_state, "pc_add", {"name": "X\u200bY"})
+    assert seated_state["party"][-1]["name"] == "XY"
+    # the ORDER matters: a Cf char between base and mark blocks NFC
+    # composition if normalization ran first — filter-then-NFC composes it
+    assert st.sanitize_name("e​́") == "é"
+    act(seated_state, "log_note", {"text": "note\u202ewidth"})
+    entry = seated_state["log"][-1]
+    assert all(category(c) not in ("Cc", "Cf") for c in entry["text"])
