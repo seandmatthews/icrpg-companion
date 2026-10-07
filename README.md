@@ -66,7 +66,8 @@ scripts/make_icons.py pure-stdlib PNG icon generator (run once, output committed
 `DESIGN.md` is the design record. Process lives in `docs/`:
 `docs/WORKFLOW.md` (implement → verify → review → merge, severity
 definitions) and `docs/tickets/CONVENTIONS.md` (ticket format, template,
-archive lifecycle — open tickets: 32–52). `AGENTS.md` carries the
+archive lifecycle — all tickets 32–52 completed and archived under
+`docs/tickets/archive/`, 2026-10-06). `AGENTS.md` carries the
 repo-wide agent rules.
 
 ## Develop
