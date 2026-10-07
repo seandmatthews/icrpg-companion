@@ -227,7 +227,10 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
             if rounds is None or not (1 <= rounds <= 99):
                 raise ActionError("rounds timer needs rounds (1..99)")
             duration = None
-        state["timers"].append(st.new_timer(label, kind, duration, rounds))
+        timer = st.new_timer(label, kind, duration, rounds)
+        while st.find_timer(state, timer["timer_id"]):  # 48-bit ids: remint on collision
+            timer = st.new_timer(label, kind, duration, rounds)
+        state["timers"].append(timer)
 
     elif action == "timer_update":
         # validate everything, then mutate: a rejected update must leave the
@@ -324,9 +327,10 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         if not (1 <= hearts <= 20):
             raise ActionError("hearts_max must be 1..20")
         player_label = _opt_str(args, "player_label")
-        state["party"].append(
-            st.new_pc(name, st.sanitize_name(player_label or "", 40), hearts)
-        )
+        pc = st.new_pc(name, st.sanitize_name(player_label or "", 40), hearts)
+        while st.find_party(state, pc["pc_id"]):  # remint on collision
+            pc = st.new_pc(name, st.sanitize_name(player_label or "", 40), hearts)
+        state["party"].append(pc)
 
     elif action == "pc_update":
         # validate everything, then mutate (ticket 32)
@@ -374,7 +378,10 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         die = str(args.get("effort_die", "d6"))
         if die not in EFFORT_DICE:
             raise ActionError("effort_die must be one of " + ", ".join(EFFORT_DICE))
-        state["npcs"].append(st.new_npc(name, hearts, die, _abilities(args), _opt_bool(args, "visible", False)))
+        npc = st.new_npc(name, hearts, die, _abilities(args), _opt_bool(args, "visible", False))
+        while st.find_npc(state, npc["npc_id"]):  # remint on collision
+            npc = st.new_npc(name, hearts, die, _abilities(args), _opt_bool(args, "visible", False))
+        state["npcs"].append(npc)
 
     elif action == "npc_update":
         # validate everything, then mutate (ticket 32)
@@ -426,14 +433,15 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         tier = str(args.get("tier", "common"))
         if tier not in TIERS:
             raise ActionError("tier must be one of " + ", ".join(TIERS))
-        state["loot"].append(
-            st.new_item(
-                name,
-                tier,
-                st.sanitize_name(_opt_str(args, "bonus") or "", 60),
-                _long_form(_opt_str(args, "description") or "", 200),
-            )
+        item = st.new_item(
+            name,
+            tier,
+            st.sanitize_name(_opt_str(args, "bonus") or "", 60),
+            _long_form(_opt_str(args, "description") or "", 200),
         )
+        while st.find_item(state, item["item_id"]):  # remint on collision
+            item = st.new_item(name, tier, item["bonus"], item["description"])
+        state["loot"].append(item)
 
     elif action == "loot_update":
         # validate everything, then mutate (ticket 32)

@@ -36,10 +36,11 @@ NOT_BUILT_PAGE = (
 CLIENT_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "client", "dist")
 
 
-def detect_lan_ip() -> str | None:
-    """Best-effort LAN IP for the QR code: UDP connect() picks a route without
-    sending packets; home-LAN ranges beat VPN/Tailscale adapters. Falls back
-    to the hostname, then None."""
+def detect_lan_candidates() -> list[str]:
+    """Best-effort LAN IPs for the QR code, best first: UDP connect() picks a
+    route without sending packets. Rank: home-LAN 192.168 beats 10.x beats
+    172.16-31 (real networks live there too, but so do WSL/Hyper-V/Docker
+    adapters) beats anything else (ticket 47)."""
     candidates: list[str] = []
     for target in (("8.8.8.8", 80), ("192.168.0.1", 80)):
         try:
@@ -59,20 +60,36 @@ def detect_lan_ip() -> str | None:
             candidates.append(ip)
     except OSError:
         pass
-    for rank in ("192.168.", "10."):
-        for ip in candidates:
-            if ip.startswith(rank):
-                return ip
+
+    def rank(ip: str) -> int:
+        if ip.startswith("192.168."):
+            return 0
+        if ip.startswith("10."):
+            return 1
+        if ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31:
+            return 2
+        return 3
+
+    return sorted(candidates, key=rank)
+
+
+def detect_lan_ip() -> str | None:
+    candidates = detect_lan_candidates()
     return candidates[0] if candidates else None
 
 
-def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
-    if fresh:
-        st.clear_snapshot(data_dir)
-    state, load_reason = st.load_snapshot(data_dir)
+def create_app(data_dir: str, fresh: bool = False, lan_ip: str | None = None) -> FastAPI:
+    st.acquire_lock(data_dir)
+    import atexit
+
+    atexit.register(st.release_lock, data_dir)
+    # --fresh no longer deletes at boot (ticket 46): a bind failure or Ctrl+C
+    # before the first action must leave the previous session on disk. The
+    # clear happens at the first commit instead.
+    state, load_reason = st.load_snapshot(data_dir) if not fresh else (None, None)
     if state is None:
         state = st.new_state(st.gen_room_code(), secrets.token_urlsafe(12))
-    room = Room(state, data_dir)
+    room = Room(state, data_dir, pending_clear=fresh)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -81,6 +98,8 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task  # no "Task was destroyed but it is pending" noise
+
+    self_lan_ip = lan_ip  # computed once at boot by run.py (ticket 47)
 
     app = FastAPI(lifespan=lifespan, title="table-companion")
     app.state_model = state  # for run.py banner + tests
@@ -96,7 +115,7 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                 "title": room.state["title"],
                 "version": room.state["version"],
                 "server_time": st.now(),
-                "lan_ip": detect_lan_ip(),
+                "lan_ip": self_lan_ip,
             }
         )
 

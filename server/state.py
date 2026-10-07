@@ -9,6 +9,7 @@ nothing. Snapshots are ephemeral session scratch, never canon.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -250,6 +251,9 @@ def is_rejected(state: dict, device_token: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _SNAPSHOT_NAME = "state.json"
+SNAPSHOT_LOCK_NAME = ".lock"
+
+_log = logging.getLogger("table-companion")
 
 
 def snapshot_path(data_dir: str) -> str:
@@ -257,11 +261,16 @@ def snapshot_path(data_dir: str) -> str:
 
 
 def save_snapshot(state: dict, data_dir: str) -> None:
+    """Write the snapshot atomically. Raises on failure — the COMMIT PATH
+    (hub.commit) decides whether a failure is fatal; a locked destination
+    must degrade to 'session lives in memory', not kill the connection
+    (ticket 46). NaN/Inf raise ValueError via allow_nan=False: browsers
+    reject bare NaN, so it must never reach the wire or the disk."""
     os.makedirs(data_dir, exist_ok=True)
     path = snapshot_path(data_dir)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False)
+        json.dump(state, f, ensure_ascii=False, allow_nan=False)
         f.flush()
         os.fsync(f.fileno())  # power loss must not leave a 0-byte snapshot
     if os.path.exists(path):
@@ -456,13 +465,60 @@ def load_snapshot(data_dir: str) -> tuple[dict | None, str | None]:
     return state, ("; ".join(notes) if notes else None)
 
 
+def lock_path(data_dir: str) -> str:
+    return os.path.join(data_dir, SNAPSHOT_LOCK_NAME)
+
+
+def acquire_lock(data_dir: str) -> None:
+    """One server per data dir: an O_EXCL lockfile holding our pid. A lock
+    from THIS process (tests re-booting the same dir) is reused; a stale one
+    from a dead process can't be reliably detected on Windows, so the error
+    tells the user how to recover (ticket 46)."""
+    os.makedirs(data_dir, exist_ok=True)
+    path = lock_path(data_dir)
+    pid = str(os.getpid())
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(pid)
+    except FileExistsError:
+        try:
+            with open(path, encoding="utf-8") as f:
+                holder = f.read().strip()
+        except OSError:
+            holder = "?"
+        if holder == pid:
+            return  # ours from an earlier create_app in this process
+        raise RuntimeError(
+            f"another table-companion server appears to be using {data_dir} "
+            f"(lock held by pid {holder}). If no other server is running, "
+            f"delete {path} and start again."
+        ) from None
+
+
+def release_lock(data_dir: str) -> None:
+    try:
+        with open(lock_path(data_dir), encoding="utf-8") as f:
+            if f.read().strip() != str(os.getpid()):
+                return  # not ours — leave it
+        os.remove(lock_path(data_dir))
+    except OSError:
+        pass
+
+
 def clear_snapshot(data_dir: str) -> None:
     # .bak goes before main: a crash mid-clear must never leave only the old
-    # generation behind to resurrect a "deleted" session
+    # generation behind to resurrect a "deleted" session. A locked file
+    # (editor/AV) logs a warning instead of crashing boot (ticket 46).
     for suffix in (".tmp", ".bak", ""):
         p = snapshot_path(data_dir) + suffix
-        if os.path.exists(p):
-            os.remove(p)
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError as e:
+            # keep going: the subsequent save's os.replace will hit the same
+            # lock and the commit guard degrades to "session lives in memory"
+            _log.warning("could not remove %s: %s", p, e)
 
 
 def sanitize_name(s: str, cap: int = 60) -> str:

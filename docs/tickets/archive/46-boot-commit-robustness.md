@@ -1,6 +1,6 @@
 # 46 — boot & commit robustness odds
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P3
 **Area:** `run.py`, `server/app.py` (create_app), `server/state.py`
 (save_snapshot, clear_snapshot, id4), `server/hub.py` (commit, dumps)
@@ -77,6 +77,44 @@ Small-but-real robustness odds and ends in the boot/commit path:
       pre-seed state with 300 items minted via `new_item`; mint one
       more → no id in state collides (asserts the check loop; cheap
       because `find_*` is linear and the seed uses the same helper).
-- [ ] Banner: `python run.py --help`-level manual check that the box
+- [x] Banner: pinned by test_banner_frame_survives_long_urls instead of a manual check that the box
       renders with a long URL (or the width test is folded into a
       pure `banner_lines()` helper test if extracted).
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/state.py`, `server/hub.py`, `server/app.py`, `run.py`,
+`server/actions.py`, `tests/test_persistence.py`, `tests/test_ws_flow.py`:
+
+- **--fresh defers deletion to the first commit** (Room.pending_clear): a
+  bind failure or Ctrl+C before the first action leaves the old session on
+  disk — the ticket's destructive double-launch scenario is now structural
+  (nothing deletes before bind). clear_snapshot warns (not crashes) on a
+  locked file; the subsequent save's os.replace hits the same lock and the
+  commit guard degrades. Pinned by test_fresh_boot_defers_deletion_to_first_
+  commit (the AC's literal port-occupancy step is subsumed: nothing deletes
+  before bind) and test_clear_snapshot_locked_file_warns_not_crashes.
+- **Commit guard**: hub.commit catches (OSError, TypeError, ValueError) →
+  warning; the acting client keeps its connection; snapshots resume when the
+  lock goes away. Pinned at BOTH layers: the state-level unit and the AC's
+  named WS test (flaky os.replace fails exactly once; socket survives;
+  resumes).
+- allow_nan=False in BOTH dump sites (round 1 caught the WS dump was
+  missed): save_snapshot raises loudly without writing; a NaN on the wire
+  now fails that one conn loudly instead of silently poisoning every
+  browser.
+- Lockfile: data/.lock via O_EXCL with our pid; same-process re-boot reuses;
+  a foreign-pid lock refuses with recovery instructions (stale-lock auto-
+  detection is unreliable on Windows — deviation from the proposal's
+  `os.kill` idea, disclosed in the error text). Released at atexit.
+- id uniqueness: the four actions add-sites remint on collision (pinned by a
+  300-item birthday seed). Deviations: content.load_pack's mints are handed
+  to ticket 48 (that lane touches content.py); log/milestone id4 mints left
+  unchecked (capped list / misroutes-one-delete — negligible, noted).
+- Banner: width follows the longest row (pinned), boot-time note added,
+  alternates line added. **Ride-along named per merge discipline:** ticket
+  47's implementation (detect_lan_candidates ranking, lan_ip injection into
+  create_app, candidates-computed-once in run.py) rode in this lane because
+  it shares the boot path; 47's own tests land in its lane.
+- Two review rounds; round 1 caught the WS dump half and the missing
+  integration test. Gates: `python -m pytest` — 113 passed ×2.

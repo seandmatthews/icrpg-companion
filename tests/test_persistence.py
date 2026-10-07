@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 from server import state as st
 
 
@@ -247,3 +249,108 @@ def test_banner_discloses_the_fallback_exactly_once(tmp_path):
     clean_app = create_app(str(tmp_path), fresh=True)
     clean_lines = banner_lines(clean_app.state_model, 8770, None, clean_app.load_reason, str(tmp_path))
     assert not any("NOTE: previous" in ln for ln in clean_lines)
+
+
+# -- boot & commit robustness (ticket 46) -------------------------------------
+
+
+def test_fresh_boot_defers_deletion_to_first_commit(tmp_path):
+    # --fresh must not destroy the old session before its replacement exists:
+    # a bind failure or Ctrl+C before the first action leaves it on disk
+    st.save_snapshot(st.new_state("OLDROOM", "tok"), str(tmp_path))
+    from server.app import create_app
+
+    app = create_app(str(tmp_path), fresh=True)
+    assert (tmp_path / st._SNAPSHOT_NAME).exists()  # not deleted at boot
+    loaded, _ = st.load_snapshot(str(tmp_path))
+    assert loaded["room_code"] == "OLDROOM"  # a non-fresh restart still recovers
+
+    app.state_room.commit()  # the first action's commit
+    loaded, _ = st.load_snapshot(str(tmp_path))
+    assert loaded["room_code"] != "OLDROOM"  # now replaced
+
+
+def test_clear_snapshot_locked_file_warns_not_crashes(tmp_path, monkeypatch, caplog):
+    s = st.new_state("ROOM", "tok")
+    st.save_snapshot(s, str(tmp_path))
+
+    def locked_remove(path):
+        raise PermissionError(32, "in use by another process")
+
+    monkeypatch.setattr(st.os, "remove", locked_remove)
+    import logging as logging_mod
+
+    with caplog.at_level(logging_mod.WARNING, logger="table-companion"):
+        st.clear_snapshot(str(tmp_path))  # must not raise
+    assert any("could not remove" in r.message for r in caplog.records)
+
+
+def test_non_finite_never_serialized(tmp_path):
+    s = st.new_state("ROOM", "tok")
+    s["title"] = float("nan")
+    with pytest.raises(ValueError):
+        st.save_snapshot(s, str(tmp_path))
+    assert not (tmp_path / st._SNAPSHOT_NAME).exists()  # nothing written
+
+
+def test_snapshot_write_failure_does_not_raise_from_commit(tmp_path, monkeypatch, caplog):
+    s = st.new_state("ROOM", "tok")
+    from server import hub
+
+    room = hub.Room(s, str(tmp_path))
+
+    def failing_replace(src, dst):
+        raise PermissionError(32, "destination locked")
+
+    monkeypatch.setattr(st.os, "replace", failing_replace)
+    import logging as logging_mod
+
+    with caplog.at_level(logging_mod.WARNING, logger="table-companion"):
+        room.commit()  # degrades to in-memory, never raises
+    assert any("snapshot write failed" in r.message for r in caplog.records)
+    assert room.state["version"] == 2  # the bump still happened
+
+
+def test_second_boot_refused_when_locked(tmp_path):
+    from server.app import create_app
+
+    st.acquire_lock(str(tmp_path))
+    import os
+
+    holder = st.lock_path(str(tmp_path))
+    with open(holder, encoding="utf-8") as f:
+        assert f.read().strip() == str(os.getpid())  # our own lock is reusable
+    create_app(str(tmp_path))  # same process: reused, no refusal
+
+    with open(holder, "w", encoding="utf-8") as f:
+        f.write("999999")  # someone else's pid
+    with pytest.raises(RuntimeError, match="another table-companion server"):
+        create_app(str(tmp_path))
+
+
+def test_new_ids_unique_against_existing(seated_state):
+    from server import actions, state as st
+
+    # 300 items minted via the real action, then one more: no id may collide
+    # (48-bit ids collide by birthday around n≈200 without the remint loop)
+    for i in range(300):
+        seated_state["loot"].append(st.new_item(f"bulk {i}", "common", "", ""))
+    actions.apply_action(seated_state, "gm", "GM", "loot_add", {"name": "the one that must not collide"})
+    ids = [i["item_id"] for i in seated_state["loot"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_banner_frame_survives_long_urls(fresh_state):
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from run import banner_lines
+
+    # the long-row driver is a long token/host — the frame must follow the
+    # longest row instead of letting it break the box (ticket 46)
+    fresh_state["gm_token"] = "t" * 80
+    lines = banner_lines(fresh_state, 8770, "192.168.137.1", None, "/data")
+    box = [ln for ln in lines if ln.startswith("  │") or ln.startswith("  ┌") or ln.startswith("  └")]
+    widths = {len(ln) for ln in box}
+    assert len(widths) == 1, f"broken frame: {widths}"
+    assert any("t" * 80 in ln for ln in lines)  # the long value printed in full

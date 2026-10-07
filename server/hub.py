@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from . import state as st
 
@@ -25,10 +26,14 @@ class Connection:
 
 
 class Room:
-    def __init__(self, state: dict, data_dir: str) -> None:
+    def __init__(self, state: dict, data_dir: str, pending_clear: bool = False) -> None:
         self.state = state
         self.data_dir = data_dir
         self.conns: list[Connection] = []
+        # --fresh defers its deletion to the first commit (ticket 46): a bind
+        # failure or Ctrl+C before the first action leaves the old session
+        # intact on disk instead of destroying it
+        self.pending_clear = pending_clear
         # knocks are live-session state: a knock restored from a snapshot has
         # no connection behind it, so prune on boot — ghosts never linger
         if state["join_requests"]:
@@ -41,9 +46,19 @@ class Room:
     # -- mutation -----------------------------------------------------------
 
     def commit(self) -> None:
-        """Version bump + snapshot after a successful mutation."""
+        """Version bump + snapshot after a successful mutation. A snapshot
+        failure is logged and swallowed: the session lives in memory and the
+        acting client keeps its connection (ticket 46)."""
         self.state["version"] = self.state.get("version", 0) + 1
-        st.save_snapshot(self.state, self.data_dir)
+        try:
+            if self.pending_clear:
+                st.clear_snapshot(self.data_dir)
+                self.pending_clear = False
+            st.save_snapshot(self.state, self.data_dir)
+        except (OSError, TypeError, ValueError):
+            logging.getLogger("table-companion").warning(
+                "snapshot write failed — continuing in memory", exc_info=True
+            )
 
     def _record_knock(self, device_token: str, name: str) -> None:
         """Append a knock under the flood cap (oldest evicted). Caller commits."""
@@ -93,7 +108,9 @@ class Room:
             "server_time": st.now(),
             "state": st.view_for(self.state, conn.role or "pending", conn.pc_id, conn.device_token),
         }
-        await conn.ws.send_text(json.dumps(payload, ensure_ascii=False))
+        # allow_nan=False: bare NaN poisons every browser's JSON.parse — fail
+        # this conn loudly rather than silently breaking all of them (ticket 46)
+        await conn.ws.send_text(json.dumps(payload, ensure_ascii=False, allow_nan=False))
 
     async def broadcast(self) -> None:
         self.refresh_seats()
@@ -134,7 +151,7 @@ class Room:
                         self._drop(conn)
 
     async def send_error(self, conn: Connection, message: str, code: str = "rejected") -> None:
-        await conn.ws.send_text(json.dumps({"type": "error", "message": message, "code": code}))
+        await conn.ws.send_text(json.dumps({"type": "error", "message": message, "code": code}, allow_nan=False))
 
     # -- join lifecycle -------------------------------------------------------
 

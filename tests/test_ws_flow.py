@@ -739,3 +739,29 @@ def test_gm_hello_with_junk_token(ns):
         assert ns.app.state_room.conns  # ...and there was one to check
     finally:
         ws.close()
+
+
+def test_save_failure_does_not_kill_connection(ns, monkeypatch, caplog):
+    # ticket 46's named AC: a locked snapshot file must degrade to "session
+    # lives in memory" — the acting client keeps its connection, and snapshots
+    # resume when the lock goes away
+    import logging
+
+    real_replace = __import__("os").replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        if calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError(32, "destination locked")
+        return real_replace(src, dst)
+
+    with gm_session(ns) as gm:
+        with caplog.at_level(logging.WARNING, logger="table-companion"):
+            monkeypatch.setattr("server.state.os.replace", flaky_replace)
+            state = do(gm, "log_note", text="during the lock")  # commit fails, socket lives
+            assert state["log"][-1]["text"] == "during the lock"
+            monkeypatch.undo()
+        do(gm, "log_note", text="after the lock")  # snapshots resume
+        assert calls["n"] == 1  # exactly one failure happened
+    assert any("snapshot write failed" in r.message for r in caplog.records)
