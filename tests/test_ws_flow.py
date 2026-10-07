@@ -673,3 +673,69 @@ def test_knock_names_normalize_nfd_nfc(ns):
                 knocks = {r["device_token"]: r["name"] for r in gm_view["join_requests"]}
                 assert knocks["dev-nfd"] == st.sanitize_name(nfc)
                 assert knocks["dev-nfc"] == knocks["dev-nfd"]
+
+
+# -- app shell polish (ticket 49) ---------------------------------------------
+
+
+def test_index_without_build_is_readable(ns, monkeypatch):
+    # booting the server before `npm run build` is the documented first-run
+    # trap: / and /join must explain that, not 500
+    import urllib.request
+
+    from server import app as app_module
+
+    monkeypatch.setattr(app_module, "CLIENT_DIST", "definitely-not-a-real-dir")
+    from types import SimpleNamespace
+
+    with TestServer(str(ns.data_dir) + "_nobuild") as srv:
+        http_base = srv.ws_base.replace("ws://", "http://")
+        for path in ("/", "/join"):
+            with urllib.request.urlopen(http_base + path, timeout=5) as r:
+                body = r.read().decode()
+                assert r.status == 200 and "Client not built" in body, path
+        with urllib.request.urlopen(http_base + "/api/bootstrap", timeout=5) as r:
+            assert r.status == 200  # the API keeps working
+        gm = WS(srv.ws_base + "/ws")  # ...and so does the WebSocket hub
+        try:
+            gm.send(type="hello_gm", gm_token=srv.app.state_model["gm_token"])
+            assert gm.recv()["type"] == "state"
+        finally:
+            gm.close()
+
+
+def test_shutdown_has_no_destroyed_task_noise(ns):
+    # ticket 49: the lifespan awaits the cancelled watcher. This test
+    # DOCUMENTS clean teardown rather than pinning a regression — on this
+    # stack (uvicorn's own _cancel_all_tasks + pytest log capture) the
+    # asyncio noise is unobservable either way; the await is hygiene with a
+    # real payoff only for a future shutdown-flush step.
+    import contextlib
+    import io
+
+    srv = TestServer(str(ns.data_dir) + "_noise")  # separate dir, fresh room
+    with gm_session(SimpleNamespace(state=srv.app.state_model, ws_base=srv.ws_base)) as gm:
+        do(gm, "log_note", text="give the watcher something to do")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        srv.close()
+    assert "Task was destroyed" not in err.getvalue()
+    assert "pending task" not in err.getvalue().lower()
+
+
+def test_gm_hello_with_junk_token(ns):
+    # ticket 49: hello_gm coerces device_token to a string — a hostile or
+    # buggy client can't plant a dict in the connection record
+    from websockets.sync.client import connect as ws_connect
+
+    ws = ws_connect(ns.ws_base + "/ws")
+    try:
+        ws.send(json.dumps({"type": "hello_gm", "gm_token": ns.state["gm_token"], "device_token": {"x": 1}}))
+        msg = json.loads(ws.recv(timeout=5))
+        assert msg["type"] == "state"  # hello succeeded
+        # assert while the conn is definitely alive (post-close it may already
+        # have been reaped, making the assertion vacuously true)
+        assert all(c.device_token == "{'x': 1}" for c in ns.app.state_room.conns if c.role == "gm")
+        assert ns.app.state_room.conns  # ...and there was one to check
+    finally:
+        ws.close()

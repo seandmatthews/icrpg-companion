@@ -1,6 +1,6 @@
 # 49 — app shell polish: readable no-build page, awaited shutdown, token coercion
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P3
 **Area:** `server/app.py` (routes, lifespan, hello_gm)
 **Found by:** 2026-10-06 full adversarial review
@@ -39,15 +39,35 @@
 
 ## Acceptance criteria
 
-- [ ] `tests/test_ws_flow.py::test_index_without_build_is_readable` —
+- [x] `tests/test_ws_flow.py::test_index_without_build_is_readable` —
       boot with `CLIENT_DIST` monkeypatched to an empty dir; `GET /`
       and `GET /join` return 200 with the build-hint text (not 500);
       `/api/bootstrap` and `/ws` still work.
-- [ ] `tests/test_ws_flow.py::test_shutdown_has_no_destroyed_task_noise`
+- [x] `tests/test_ws_flow.py::test_shutdown_has_no_destroyed_task_noise`
       — run a full boot/act/shutdown cycle capturing stderr; assert no
       "Task was destroyed" / "pending task" lines (uvicorn shutdown
       already happens in the fixture — this just pins the await).
-- [ ] `tests/test_ws_flow.py::test_gm_hello_with_junk_token` —
+- [x] `tests/test_ws_flow.py::test_gm_hello_with_junk_token` —
       `hello_gm {gm_key: <valid>, device_token: {"x": 1}}` → hello
       succeeds with a string token stored (no latent TypeError on the
       first future consumer; today this only pins the coercion).
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/app.py` and `tests/test_ws_flow.py`:
+
+- No-build page: `/` and `/join` serve a themed, readable "Client not built —
+  run npm install && npm run build, then restart" page (per-request check on
+  /join, boot-time fallback route on /), with a boot warning logged. Pinned
+  including the AC's /ws-still-works clause (round 1 caught it untested).
+- Lifespan: `task.cancel()` + `suppress(CancelledError): await task`.
+  **Documented deviation:** the named shutdown test turned out to be
+  unfalsifiable on this stack — uvicorn's own `_cancel_all_tasks` completes
+  the unawaited watcher and pytest's log capture hides the asyncio noise —
+  so the test documents clean teardown rather than pinning a regression (its
+  comment says so). The await is hygiene whose real payoff is a future
+  shutdown-flush step.
+- hello_gm device_token coercion: already landed with ticket 38; the new
+  junk-token test pins it (assertion placed pre-close so it can't pass
+  vacuously — round 1 caught that).
+- Gates: `python -m pytest` — 105 passed.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import actions, state as st
@@ -21,6 +22,16 @@ from .hub import Connection, Room
 _log = logging.getLogger("table-companion")
 
 HELLO_DEADLINE = 10.0  # a socket that never says hello is closed (ticket 38)
+
+NOT_BUILT_PAGE = (
+    "<!doctype html><meta charset='utf-8'><title>table companion</title>"
+    "<body style='font-family:system-ui;background:#16161a;color:#f5f0e6;"
+    "display:grid;place-items:center;height:100vh;margin:0'>"
+    "<div style='text-align:center'><h1>Client not built</h1>"
+    "<p>The web client hasn't been compiled yet.</p>"
+    "<p><code>cd client &&amp; npm install &amp;&amp; npm run build</code></p>"
+    "<p>Then restart this server.</p></div></body>"
+)
 
 CLIENT_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "client", "dist")
 
@@ -68,6 +79,8 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
         task = asyncio.create_task(_timer_watcher(room))
         yield
         task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task  # no "Task was destroyed but it is pending" noise
 
     app = FastAPI(lifespan=lifespan, title="table-companion")
     app.state_model = state  # for run.py banner + tests
@@ -236,12 +249,21 @@ def create_app(data_dir: str, fresh: bool = False) -> FastAPI:
                 _log.warning("hello-deadline sweep failed", exc_info=True)
 
     index_html = os.path.join(CLIENT_DIST, "index.html")
+    if not os.path.exists(index_html):
+        _log.warning("client build missing (%s) — / will serve a build hint", index_html)
 
     @app.get("/join", include_in_schema=False)
-    async def join_page() -> FileResponse:
+    async def join_page():
+        if not os.path.exists(index_html):
+            return HTMLResponse(NOT_BUILT_PAGE)
         return FileResponse(index_html)
 
     if os.path.isdir(CLIENT_DIST):
         app.mount("/", StaticFiles(directory=CLIENT_DIST, html=True), name="client")
+    else:
+
+        @app.get("/", include_in_schema=False)
+        async def root_fallback():
+            return HTMLResponse(NOT_BUILT_PAGE)
 
     return app
