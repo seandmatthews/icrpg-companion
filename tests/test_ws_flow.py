@@ -30,8 +30,8 @@ class TestServer:
 
     LIVE: list["TestServer"] = []
 
-    def __init__(self, data_dir: str, fresh: bool = True):
-        self.app = create_app(data_dir, fresh=fresh)
+    def __init__(self, data_dir: str, fresh: bool = True, lan_ip: str | None = None):
+        self.app = create_app(data_dir, fresh=fresh, lan_ip=lan_ip)
         # port=0: bind an ephemeral port and read the real one off the socket —
         # a pre-bound probe socket had a TOCTOU window
         config = uvicorn.Config(self.app, host="127.0.0.1", port=0, log_level="error")

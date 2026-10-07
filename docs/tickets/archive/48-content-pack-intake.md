@@ -1,6 +1,6 @@
 # 48 — content pack intake: fields bypass action-layer validation; BOM mislabeled corrupt
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P3
 **Area:** `server/content.py` (load_pack, _pack_path read), extends
 ticket 32 item 4
@@ -53,3 +53,24 @@ a crash staying in state (partial apply).
 - [ ] The missing-key/partial-apply regressions land with ticket 32's
       acceptance tests — this ticket's tests must not duplicate them,
       only the tier/sanitize/BOM surface.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/content.py` + tests:
+
+- utf-8-sig open (a BOM is not corruption; pinned).
+- targets: range 2..30 and unknown-keys rejection, matching set_targets
+  exactly; pinned including non-default applied values (round 2 caught the
+  first test's positive case passing vacuously — `and`-chained clears plus
+  default-value asserts).
+- **Console-identical intake (the central AC):** pack loot names and timer
+  labels go through sanitize_name (cap 60, empty-after rejected) and
+  descriptions through `_long_form` (over-cap rejects the WHOLE pack, all-
+  or-nothing) — a pack with a zero-width name or a 250-char description can
+  no longer land shapes the GM console could never produce. The round-1 P1
+  (raw name/label passthrough — invisible names entering state) is closed,
+  and it also fixed the name-dedup: sanitized-vs-sanitized comparison.
+- Id remint loops in load_pack (handed off from ticket 46), pinned by a
+  300-item pool test.
+- Gates: `python -m pytest` — 122 passed ×2; alfheim.json passes the stricter
+  validation unchanged.

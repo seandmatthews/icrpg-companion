@@ -39,13 +39,23 @@ def _validate_pack(data, pack: str) -> tuple[list, list, dict | None]:
             raise actions.ActionError(
                 f"starter pack '{pack}': targets must be an object with integer default/scene"
             )
+        if not (2 <= targets["default"] <= 30 and 2 <= targets["scene"] <= 30):
+            raise actions.ActionError(f"starter pack '{pack}': targets must be 2..30")
+        extra = set(targets) - {"default", "scene"}
+        if extra:
+            raise actions.ActionError(
+                f"starter pack '{pack}': targets has unknown keys ({', '.join(sorted(extra))})"
+            )
 
     loot_raw = data.get("loot", [])
     if not isinstance(loot_raw, list):
         raise actions.ActionError(f"starter pack '{pack}': 'loot' must be a list")
     loot = []
     for i, item in enumerate(loot_raw):
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise actions.ActionError(f"starter pack '{pack}' loot entry {i}: needs a name")
+        name = st.sanitize_name(item["name"], 60)
+        if not name:
             raise actions.ActionError(f"starter pack '{pack}' loot entry {i}: needs a name")
         tier = item.get("tier", "common")
         if tier not in actions.TIERS:
@@ -55,14 +65,19 @@ def _validate_pack(data, pack: str) -> tuple[list, list, dict | None]:
         bonus, description = item.get("bonus", ""), item.get("description", "")
         if not isinstance(bonus, str) or not isinstance(description, str):
             raise actions.ActionError(f"starter pack '{pack}' loot entry {i}: bonus/description must be strings")
-        loot.append((item["name"], tier, bonus, description))
+        # identical intake rules to the GM console (ticket 48): names sanitize,
+        # long-form rejects over-cap instead of silently clipping
+        loot.append((name, tier, st.sanitize_name(bonus, 60), actions._long_form(description, 200)))
 
     timers_raw = data.get("timers", [])
     if not isinstance(timers_raw, list):
         raise actions.ActionError(f"starter pack '{pack}': 'timers' must be a list")
     timers = []
     for i, t in enumerate(timers_raw):
-        if not isinstance(t, dict) or not isinstance(t.get("label"), str) or not t["label"].strip():
+        if not isinstance(t, dict) or not isinstance(t.get("label"), str):
+            raise actions.ActionError(f"starter pack '{pack}' timers entry {i}: needs a label")
+        t = {**t, "label": st.sanitize_name(t["label"], 60)}
+        if not t["label"]:
             raise actions.ActionError(f"starter pack '{pack}' timers entry {i}: needs a label")
         kind = t.get("kind")
         if kind == "alarm":
@@ -88,7 +103,7 @@ def _validate_pack(data, pack: str) -> tuple[list, list, dict | None]:
 def load_pack(state: dict, pack: str) -> str:
     path = _pack_path(pack)
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:  # -sig: Windows editors love BOMs
             data = json.load(f)
     except FileNotFoundError:
         raise actions.ActionError(f"no starter pack named '{pack}'")
@@ -108,15 +123,19 @@ def load_pack(state: dict, pack: str) -> str:
     for name, tier, bonus, description in loot:
         if name.lower() in existing_names:
             continue
-        state["loot"].append(
-            st.new_item(name, tier, st.sanitize_name(bonus, 60), st.sanitize_name(description, 200))
-        )
+        item = st.new_item(name, tier, bonus, description)
+        while st.find_item(state, item["item_id"]):  # 48-bit ids: remint on collision
+            item = st.new_item(name, tier, item["bonus"], item["description"])
+        state["loot"].append(item)
         added.append(name)
 
     for label, kind, duration_s, rounds in timers:
         if label.lower() in existing_labels:
             continue
-        state["timers"].append(st.new_timer(label, kind, duration_s, rounds))
+        timer = st.new_timer(label, kind, duration_s, rounds)
+        while st.find_timer(state, timer["timer_id"]):
+            timer = st.new_timer(label, kind, duration_s, rounds)
+        state["timers"].append(timer)
         added.append(label)
 
     return ", ".join(added) if added else "nothing new (already loaded)"
