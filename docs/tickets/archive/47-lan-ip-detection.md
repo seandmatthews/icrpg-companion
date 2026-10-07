@@ -1,6 +1,6 @@
 # 47 — LAN IP detection: wrong adapter, blocking DNS on the loop, DHCP staleness
 
-**Status:** proposed
+**Status:** completed — implemented 2026-10-06 (boot-path work rode ticket 46's lane, named there); tests + review this lane.
 **Priority:** P3
 **Area:** `server/app.py` (detect_lan_ip, /api/bootstrap), `run.py`
 (banner)
@@ -50,6 +50,23 @@
       `/api/bootstrap` five times → the counter stays at the startup
       call count (no per-request detection, hence no blocking DNS on
       the loop).
-- [ ] Banner ambiguity: with multiple candidates injected, the banner
+- [x] Banner ambiguity: with multiple candidates injected, the banner
       lists them all (pure `banner_lines()` helper test if extracted
       per ticket 46's pattern, else manual).
+
+## Implementation notes (2026-10-06)
+
+- Ranking: 192.168 > 10.x > 172.16-31 (ranked LAST — real networks live
+  there, but so do WSL/Hyper-V/Docker adapters) > input order. Extracted as
+  pure `_rank_candidates` with an isdigit octet guard; pinned by a table
+  test including the AC's 172-only and Docker scenarios.
+- Once-at-boot: run.py computes candidates and injects `lan_ip` into
+  create_app; /api/bootstrap serves the closure value. `test_bootstrap_
+  does_not_detect` pins the structural fact (a counting monkeypatch stays
+  at zero through five requests). The alternates line and the boot-time
+  note are pinned in test_banner_lists_alternates_and_boot_note; the
+  injection value by test_create_app_injects_lan_ip (TestServer gained a
+  lan_ip kwarg).
+- Deviation: the AC's "print all candidates with a pick-the-right-one hint"
+  landed as the alternates line (only when detection is ambiguous).
+- Gates: `python -m pytest` — 122 passed ×2.

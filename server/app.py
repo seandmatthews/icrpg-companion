@@ -61,12 +61,18 @@ def detect_lan_candidates() -> list[str]:
     except OSError:
         pass
 
+    return _rank_candidates(candidates)
+
+
+def _rank_candidates(candidates: list[str]) -> list[str]:
+    """Pure ranking so tests can inject candidate sets (ticket 47)."""
+
     def rank(ip: str) -> int:
         if ip.startswith("192.168."):
             return 0
         if ip.startswith("10."):
             return 1
-        if ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31:
+        if ip.startswith("172.") and ip.split(".")[1].isdigit() and 16 <= int(ip.split(".")[1]) <= 31:
             return 2
         return 3
 

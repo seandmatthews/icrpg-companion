@@ -699,3 +699,94 @@ def test_control_and_zero_width_stripped(seated_state):
     act(seated_state, "log_note", {"text": "note\u202ewidth"})
     entry = seated_state["log"][-1]
     assert all(category(c) not in ("Cc", "Cf") for c in entry["text"])
+
+
+def test_pack_bom_loads(seated_state, monkeypatch, tmp_path):
+    from server import content
+
+    monkeypatch.setattr(content, "PACKS_DIR", str(tmp_path))
+    (tmp_path / "bom.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({"loot": [{"name": "BOM ring", "tier": "common"}]}).encode("utf-8")
+    )
+    act(seated_state, "starter_load", {"pack": "bom"})  # a BOM is not corruption
+    assert any(i["name"] == "BOM ring" for i in seated_state["loot"])
+
+
+def test_pack_targets_validated(seated_state, monkeypatch, tmp_path):
+    from server import content
+
+    monkeypatch.setattr(content, "PACKS_DIR", str(tmp_path))
+    # the targets guard only fires on an empty pool+party — clear both
+    seated_state["party"].clear()
+    seated_state["loot"].clear()
+
+    (tmp_path / "range.json").write_text(
+        json.dumps({"targets": {"default": 99, "scene": 14}}), encoding="utf-8"
+    )
+    with pytest.raises(ActionError, match="2..30"):
+        act(seated_state, "starter_load", {"pack": "range"})
+
+    (tmp_path / "extra.json").write_text(
+        json.dumps({"targets": {"default": 12, "scene": 14, "hard": 20}}), encoding="utf-8"
+    )
+    with pytest.raises(ActionError, match="unknown keys"):
+        act(seated_state, "starter_load", {"pack": "extra"})
+
+    # non-default values so a vacuous pass is impossible
+    (tmp_path / "ok.json").write_text(
+        json.dumps({"targets": {"default": 7, "scene": 9}}), encoding="utf-8"
+    )
+    act(seated_state, "starter_load", {"pack": "ok"})
+    assert seated_state["targets"] == {"default": 7, "scene": 9}
+
+
+def test_pack_ids_never_collide_with_pool(seated_state, monkeypatch, tmp_path):
+    from server import content, state as st
+
+    monkeypatch.setattr(content, "PACKS_DIR", str(tmp_path))
+    for i in range(300):
+        seated_state["loot"].append(st.new_item(f"bulk {i}", "common", "", ""))
+    (tmp_path / "big.json").write_text(
+        json.dumps({"loot": [{"name": "pack ring", "tier": "common"}]}), encoding="utf-8"
+    )
+    act(seated_state, "starter_load", {"pack": "big"})
+    ids = [i["item_id"] for i in seated_state["loot"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_pack_unsanitized_fields_normalized(seated_state, monkeypatch, tmp_path):
+    # ticket 48's central AC: a pack and the GM console produce the SAME
+    # stored shape (zero-width chars gone, NFD composed, caps enforced)
+    from server import content, state as st
+
+    monkeypatch.setattr(content, "PACKS_DIR", str(tmp_path))
+    raw_name = "Ring \u200bof Echoes"
+    raw_desc = "d" * 250
+    (tmp_path / "weird.json").write_text(
+        json.dumps({"loot": [{"name": raw_name, "tier": "common", "description": raw_desc}]}),
+        encoding="utf-8",
+    )
+    # a valid entry BEFORE the over-cap one: the pack must reject wholesale
+    (tmp_path / "weird.json").write_text(
+        json.dumps({"loot": [
+            {"name": "Good ring", "tier": "common"},
+            {"name": "Overlong", "tier": "common", "description": raw_desc},
+        ]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ActionError, match="too long"):  # over-cap description rejects the pack
+        act(seated_state, "starter_load", {"pack": "weird"})
+    assert all(i["name"] != "Good ring" for i in seated_state["loot"])  # nothing applied
+
+    (tmp_path / "weird2.json").write_text(
+        json.dumps({"loot": [{"name": raw_name, "tier": "common", "description": "fine"}]}),
+        encoding="utf-8",
+    )
+    act(seated_state, "starter_load", {"pack": "weird2"})
+    packed = next(i for i in seated_state["loot"] if "Echoes" in i["name"])
+    via_action = st.new_item(
+        st.sanitize_name(raw_name, 60), "common", "", st.sanitize_name("fine", 200)
+    )
+    assert packed["name"] == via_action["name"]  # identical intake, zero-width gone
+    assert "\u200b" not in json.dumps(packed)
+    assert packed["description"] == "fine"

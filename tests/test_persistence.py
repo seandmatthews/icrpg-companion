@@ -354,3 +354,37 @@ def test_banner_frame_survives_long_urls(fresh_state):
     widths = {len(ln) for ln in box}
     assert len(widths) == 1, f"broken frame: {widths}"
     assert any("t" * 80 in ln for ln in lines)  # the long value printed in full
+
+
+def test_banner_lists_alternates_and_boot_note(fresh_state):
+    # ticket 47: ambiguous detection discloses the alternates, and the join
+    # URL is marked boot-time
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from run import banner_lines
+
+    lines = banner_lines(
+        fresh_state, 8770, "192.168.1.10", None, "/data", alternates=["192.168.1.10", "172.20.0.5"]
+    )
+    assert any("try: 172.20.0.5" in ln for ln in lines)
+    assert any("fixed at boot" in ln for ln in lines)
+    # no alternates when only one candidate exists
+    plain = banner_lines(fresh_state, 8770, "192.168.1.10", None, "/data", alternates=["192.168.1.10"])
+    assert not any("try:" in ln for ln in plain)
+
+
+def test_create_app_injects_lan_ip(tmp_path):
+    # the value run.py computes at boot must be what /api/bootstrap serves
+    import json
+    import urllib.request
+
+    from server.app import create_app
+    from test_ws_flow import TestServer
+
+    create_app(str(tmp_path), lan_ip="10.1.2.3")  # cheap smoke: no detection crash
+    with TestServer(str(tmp_path) + "_ip", fresh=True, lan_ip="10.1.2.3") as srv:
+        http_base = srv.ws_base.replace("ws://", "http://")
+        with urllib.request.urlopen(http_base + "/api/bootstrap", timeout=5) as r:
+            body = json.loads(r.read())
+        assert body["lan_ip"] == "10.1.2.3"  # injected, not re-detected
