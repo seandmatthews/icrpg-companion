@@ -1,6 +1,6 @@
 # 44 — GM action disclosure: silent heart loss, unlogged recall, duplicate names, silent truncation
 
-**Status:** proposed
+**Status:** completed — implemented and code-reviewed 2026-10-06 (two review rounds).
 **Priority:** P3
 **Area:** `server/actions.py` (pc/npc hearts_max, loot_assign, pc_add/
 npc_add, long-form field caps), `client/src/views/GMView.tsx` (dropdowns)
@@ -65,7 +65,31 @@ character (which supersedes the numeral for that character).
 - [ ] `tests/test_actions.py::test_overlong_longform_rejected` —
       `loot_add`/`loot_update` with a 250-char description raises
       ActionError (name over 40 chars may still clip — assert which).
-- [ ] Client half (manual): two
+- [x] Client half (manual): two
       same-named PCs → the knock "seat as…" and loot-assign dropdowns
       show the numeral discriminator ("Gandalf 2"), visibly
       distinguishing them; `npm run build` green.
+
+## Implementation notes (2026-10-06)
+
+Landed in `server/actions.py`, `client/src/views/GMView.tsx`, tests:
+
+- Hearts-max shrink logs (pc AND npc — round 1 caught the npc half was
+  missed), audience "gm", only when hearts actually drop; raising the max
+  back logs nothing.
+- Loot recall (`loot_assign {pc_id: null}`) and `pc_delete` unclaims now log;
+  recall is audience "all" (matches assign), delete-cleanup is "gm".
+- Long-form fields (loot description 200, milestone reason 140, log text
+  200) REJECT over-cap via `_long_form` instead of silently clipping; names,
+  labels, bonus, title still clip. Round 1 caught the description check had
+  landed in loot_update's mutate section — a combined rename + overlong
+  description half-applied; hoisted into validate-then-mutate and pinned.
+- Duplicate names: ruling implemented — server allows, GMView dropdowns
+  (knock seat-as, rejection seat-anyway, loot assign) show numeral
+  discriminators ("Gandalf 2") from a party-wide occurrence map.
+- `pc_delete` with a stale id now raises "no such pc" (it previously
+  silently no-op'd; the logging change briefly made it a TypeError — round 1
+  caught that too).
+- The custom-display-name future ticket noted in the Ruling remains unfiled,
+  as ruled.
+- Gates: `python -m pytest` — 98 passed; `npm run build` green.

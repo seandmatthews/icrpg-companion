@@ -573,3 +573,82 @@ def test_set_targets_delta_shape(fresh_state):
     # absolute shape still works
     act(fresh_state, "set_targets", {"default": 12, "scene": 14})
     assert fresh_state["targets"] == {"default": 12, "scene": 14}
+
+
+# -- GM action disclosure (ticket 44) -----------------------------------------
+
+
+def test_hearts_max_shrink_is_logged(seated_state):
+    pc = seated_state["party"][0]
+    act(seated_state, "pc_update", {"pc_id": pc["pc_id"], "hearts_max": 2})
+    assert pc["hearts"] == 2
+    entry = seated_state["log"][-1]
+    assert entry["audience"] == "gm" and pc["name"] in entry["text"]
+    # raising the max back doesn't heal hearts — and doesn't log a non-event
+    log_len = len(seated_state["log"])
+    act(seated_state, "pc_update", {"pc_id": pc["pc_id"], "hearts_max": 5})
+    assert pc["hearts"] == 2  # the loss was real
+    assert len(seated_state["log"]) == log_len
+
+
+def test_loot_recall_is_logged(seated_state):
+    item = seated_state["loot"][0]
+    pc = seated_state["party"][0]
+    act(seated_state, "loot_assign", {"item_id": item["item_id"], "pc_id": pc["pc_id"]})
+    act(seated_state, "loot_assign", {"item_id": item["item_id"], "pc_id": None})
+    entry = seated_state["log"][-1]
+    assert item["claimed_by"] is None
+    assert "recalled" in entry["text"] and pc["name"] in entry["text"]
+
+
+def test_pc_delete_unclaims_are_logged(seated_state):
+    item = seated_state["loot"][0]
+    pc = seated_state["party"][0]
+    act(seated_state, "loot_assign", {"item_id": item["item_id"], "pc_id": pc["pc_id"]})
+    act(seated_state, "pc_delete", {"pc_id": pc["pc_id"]})
+    assert item["claimed_by"] is None
+    entry = seated_state["log"][-1]
+    assert "returned to the pool" in entry["text"] and item["name"] in entry["text"]
+
+
+def test_duplicate_pc_name_allowed(seated_state):
+    # ruling: duplicates are allowed server-side; the UI discriminates
+    act(seated_state, "pc_add", {"name": "Vex"})
+    ids = [p["pc_id"] for p in seated_state["party"]]
+    assert len(ids) == 2 and ids[0] != ids[1]
+
+
+def test_overlong_longform_rejected(seated_state):
+    item = seated_state["loot"][0]
+    with pytest.raises(ActionError, match="too long"):
+        act(seated_state, "loot_add", {"name": "Ring", "description": "x" * 201})
+    assert all(i["name"] != "Ring" for i in seated_state["loot"])  # nothing applied
+    with pytest.raises(ActionError, match="too long"):
+        act(seated_state, "loot_update", {"item_id": item["item_id"], "description": "x" * 201})
+    assert item["description"] == ""
+    act(seated_state, "pc_add", {"name": "x" * 60})  # NAMES still clip silently
+    assert seated_state["party"][-1]["name"] == "x" * 40
+    act(seated_state, "log_note", {"text": "y" * 200})  # exactly at cap passes
+    assert seated_state["log"][-1]["text"] == "y" * 200
+
+
+def test_hearts_max_shrink_npc_logged(seated_state):
+    npc = seated_state["npcs"][0]
+    act(seated_state, "npc_update", {"npc_id": npc["npc_id"], "hearts_max": 0.5})
+    assert npc["hearts"] == 0.5
+    entry = seated_state["log"][-1]
+    assert entry["audience"] == "gm" and npc["name"] in entry["text"]
+
+
+def test_delete_missing_pc_says_no_such_pc(seated_state):
+    with pytest.raises(ActionError, match="no such pc"):
+        act(seated_state, "pc_delete", {"pc_id": "pc_nope"})
+
+
+def test_rejected_loot_update_partial_apply(seated_state):
+    # ticket 32's contract: a rejected update must not half-apply (the
+    # description length check is the newest validate-section member)
+    item = seated_state["loot"][0]
+    with pytest.raises(ActionError, match="too long"):
+        act(seated_state, "loot_update", {"item_id": item["item_id"], "name": "Arkenstone", "description": "x" * 201})
+    assert item["name"] == "Ford signet ring"  # the rename did NOT ride along

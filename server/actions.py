@@ -29,6 +29,14 @@ def _need(args: dict, key: str) -> object:
     return v
 
 
+def _long_form(text: str, cap: int) -> str:
+    """Long-form fields the GM composed deliberately: over-cap is an error,
+    not a silent mid-word clip (names/labels still clip — ticket 44)."""
+    if len(text) > cap:
+        raise ActionError(f"that text is too long (max {cap} characters)")
+    return st.sanitize_name(text, cap)
+
+
 def _need_str(args: dict, key: str) -> str:
     """A required field that must genuinely be a string — str() of a dict or
     number would render Python repr into table-visible text."""
@@ -334,15 +342,20 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
             pc["player_label"] = st.sanitize_name(player_label, 40)
         if hm is not None:
             pc["hearts_max"] = hm
+            if pc["hearts"] > hm:
+                lost = round(pc["hearts"] - hm, 2)
+                st.add_log(state, actor, f"{pc['name']} loses {lost} hearts (max lowered to {hm})", audience="gm")
             pc["hearts"] = min(pc["hearts"], hm)
 
     elif action == "pc_delete":
-        pc_id = str(_need(args, "pc_id"))
+        pc = _need_pc(state, args)  # a stale id is "no such pc", not a no-op
+        pc_id = pc["pc_id"]
         state["party"] = [p for p in state["party"] if p["pc_id"] != pc_id]
         state["bindings"] = {k: b for k, b in state["bindings"].items() if b["pc_id"] != pc_id}
         for item in state["loot"]:
             if item["claimed_by"] == pc_id:
                 item["claimed_by"] = None
+                st.add_log(state, actor, f"{item['name']} returned to the pool ({pc['name']} left)", audience="gm")
 
     elif action == "pc_hearts":
         pc = _need_pc(state, args)
@@ -382,6 +395,9 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
             npc["name"] = st.sanitize_name(name, 40) or npc["name"]
         if hearts is not None:
             npc["hearts_max"] = hearts
+            if npc["hearts"] > hearts:
+                lost = round(npc["hearts"] - hearts, 2)
+                st.add_log(state, actor, f"{npc['name']} loses {lost} hearts (max lowered to {hearts})", audience="gm")
             npc["hearts"] = min(npc["hearts"], hearts)
         if "effort_die" in args:
             npc["effort_die"] = args["effort_die"]
@@ -415,7 +431,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
                 name,
                 tier,
                 st.sanitize_name(_opt_str(args, "bonus") or "", 60),
-                st.sanitize_name(_opt_str(args, "description") or "", 200),
+                _long_form(_opt_str(args, "description") or "", 200),
             )
         )
 
@@ -427,6 +443,8 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         description = _opt_str(args, "description")
         if "tier" in args and args["tier"] not in TIERS:
             raise ActionError("bad tier")
+        if description is not None:
+            description = _long_form(description, 200)
         if name is not None:
             item["name"] = st.sanitize_name(name, 60) or item["name"]
         if "tier" in args:
@@ -434,7 +452,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         if bonus is not None:
             item["bonus"] = st.sanitize_name(bonus, 60)
         if description is not None:
-            item["description"] = st.sanitize_name(description, 200)
+            item["description"] = description
 
     elif action == "loot_delete":
         iid = str(_need(args, "item_id"))
@@ -446,7 +464,9 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
         if pc_id is None:
             if item["claimed_by"] is None:
                 raise ActionError("item is already in the pool")
+            owner = st.find_party(state, item["claimed_by"])
             item["claimed_by"] = None
+            st.add_log(state, actor, f"{item['name']} recalled from {owner['name'] if owner else 'a gone character'}")
         else:
             pc = st.find_party(state, str(pc_id))
             if pc is None:
@@ -482,7 +502,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
 
     elif action == "milestone_add":
         pc = _need_pc(state, args)
-        reason = st.sanitize_name(_need_str(args, "reason"), 140)
+        reason = _long_form(_need_str(args, "reason"), 140)
         state["milestones"].append(
             {"id": st.id4("ms"), "pc_id": pc["pc_id"], "pc_name": pc["name"], "reason": reason, "ts": st.now_iso()}
         )
@@ -498,7 +518,7 @@ def _gm_action(state: dict, actor: str, action: str, args: dict) -> None:
             raise ActionError("no such milestone")
 
     elif action == "log_note":
-        text = st.sanitize_name(_need_str(args, "text"), 200)
+        text = _long_form(_need_str(args, "text"), 200)
         audience = "all" if _opt_bool(args, "share", False) else "gm"
         st.add_log(state, actor, text, audience=audience)
 
