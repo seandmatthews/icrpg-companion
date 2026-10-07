@@ -70,6 +70,7 @@ h1, h2 {
   justify-content: center;
   align-items: center;
   min-height: 100vh;
+  min-height: 100dvh; /* 100vh hides under the mobile URL bar */
   padding: 1rem;
 }
 
@@ -198,6 +199,39 @@ input[type="number"] {
   font-size: 2.3rem;
 }
 
+/* 10-12 hearts: shrink the cells; 13+ goes numeric (see Hearts.tsx) */
+.hearts-lg.hearts-many .heart {
+  font-size: 1.5rem;
+  width: 1.1em;
+}
+
+/* above 12 max: numeric readout instead of a cell strip */
+.hearts-numeric {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.hearts-numeric .hearts-count {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* the player's primary control gets the big readout; GM rows stay compact */
+.player-hearts .hearts-numeric .hearts-count {
+  font-size: 2.3rem;
+}
+
+.hearts-numeric .heart {
+  font-size: 1.2rem;
+  width: auto;
+}
+
+.hearts-lg.hearts-numeric .heart {
+  font-size: 1.6rem;
+}
+
 .heart-full {
   color: var(--red);
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.35);
@@ -212,12 +246,6 @@ input[type="number"] {
   position: absolute;
   inset: 0;
   clip-path: inset(0 50% 0 0);
-}
-
-.hearts-overflow {
-  font-size: 0.8rem;
-  color: var(--ink-soft);
-  margin-left: 0.3rem;
 }
 
 .heart-stepper {
@@ -757,7 +785,8 @@ input[type="number"] {
 
 .toast {
   position: fixed;
-  bottom: 1rem;
+  bottom: 1rem; /* fallback where env() is unsupported */
+  bottom: calc(1rem + env(safe-area-inset-bottom));
   left: 50%;
   transform: translateX(-50%);
   z-index: 60;
@@ -783,7 +812,9 @@ input[type="number"] {
 .player-view {
   max-width: 560px;
   margin: 0 auto;
-  padding: 0.8rem 0.8rem 2rem;
+  padding: 0.8rem 0.8rem calc(2rem + env(safe-area-inset-bottom));
+  padding-left: calc(0.8rem + env(safe-area-inset-left));
+  padding-right: calc(0.8rem + env(safe-area-inset-right));
 }
 
 .player-header {
@@ -806,8 +837,18 @@ input[type="number"] {
 .player-hearts .heart-stepper {
   justify-content: center;
   display: flex;
+  flex-wrap: wrap; /* 10+ hearts must wrap, not push the buttons off-screen */
   align-items: center;
   gap: 0.8rem;
+}
+
+/* the player's primary control: real touch targets, not 28px */
+.player-hearts .btn-sm,
+.player-view .btn-sm {
+  min-height: 44px;
+  min-width: 44px;
+  font-size: 1rem;
+  padding: 0.3rem 0.9rem;
 }
 
 .player-footer {
@@ -815,6 +856,7 @@ input[type="number"] {
   justify-content: space-between;
   align-items: center;
   margin-top: 1rem;
+  margin-bottom: env(safe-area-inset-bottom);
 }
 
 .btn-claim {

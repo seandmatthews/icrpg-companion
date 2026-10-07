@@ -47,8 +47,14 @@ export function TimerGM({
   busy?: boolean;
 }) {
   const id = { timer_id: timer.timer_id };
+  // the GM is the one who must REACT to the last 30 seconds — the hot
+  // treatment belongs here too, not just on player phones (ticket 51)
+  const remain = timerRemainSec(timer, skew, now);
+  const urgent = remain != null && remain > 0 && remain <= 30;
   return (
-    <div className={`timer ${timer.status === "done" ? "timer-done" : ""}`}>
+    <div
+      className={`timer ${urgent ? "timer-hot" : ""} ${timer.status === "done" ? "timer-done" : ""}`}
+    >
       <div className="timer-head">
         <span className="timer-label">{timer.label}</span>
         <button className="btn btn-sm btn-ghost" onClick={() => send("timer_delete", id)} title="delete timer">
