@@ -236,14 +236,29 @@ def test_npc_reveal_logs_publicly(seated_state):
     assert any("takes the stage" in e["text"] for e in seated_state["log"])
 
 
+def test_version_monotonic_across_reset(fresh_state):
+    # ticket 43: the client staleness check (ticket 32's proposal) needs
+    # version to never go backwards — a reset must not collapse it to 1
+    # version bumps live in Room.commit, so at the state layer we set a
+    # realistic mid-session counter directly — reset must carry it, not
+    # collapse it to new_state()'s 1
+    fresh_state["version"] = 412
+    act(fresh_state, "log_note", {"text": "note"})
+    act(fresh_state, "session_reset")
+    assert fresh_state["version"] == 412  # the next commit exceeds it (413)
+
+
 def test_session_reset_keeps_room_identity(fresh_state):
+    # the room code is KEPT by ruling (ticket 43): devices already hold the
+    # join URL; --fresh is the new-room path
     s = fresh_state
     act(s, "pc_add", {"name": "Vex"})
+    before = s["version"]
     act(s, "session_reset")
     assert s["party"] == []
     assert s["room_code"] == "TEST"
     assert s["gm_token"] == "gm-secret"
-    assert s["version"] == 1
+    assert s["version"] == before  # monotonic (test_version_monotonic_across_reset)
 
 
 def test_starter_load_idempotent(fresh_state):
